@@ -23,13 +23,111 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.viewmodel.compose.viewModel // 追加: libs.androidx.lifecycle.viewmodelCompose が必要
+import org.example.project.AppViewModel
+import org.example.project.LogLevel
+import org.example.project.LogLine
 
 // --- データモデル ---
 data class TestPlugin(val id: String, val name: String, val status: String)
-data class LogLine(val timestamp: String, val tag: String, val message: String, val level: LogLevel)
-enum class LogLevel { INFO, DEBUG, ERROR, PASS }
 
+@Composable
+@Preview
+fun App() {
+    // ViewModelの取得 (ここでinitブロックが走り、ADB監視が始まります)
+    val viewModel: AppViewModel = viewModel { AppViewModel() }
 
+    // ログフローの監視
+    val logLines = remember { mutableStateListOf<LogLine>() }
+    LaunchedEffect(viewModel) {
+        viewModel.logFlow.collect { log ->
+            logLines.add(log)
+            // ログが多すぎたら古いものを消すなどの処理もここで可能
+        }
+    }
+
+    // UIステートの監視 (ボタンの色変えなどに使用)
+    val uiState by viewModel.uiState.collectAsState()
+
+    MaterialTheme(colors = darkColors()) {
+        Scaffold(
+            topBar = {
+                TopControlBar(
+                    // ViewModelの状態を渡す
+                    adbConnected = uiState.adbIsValid
+                )
+            },
+            content = { padding ->
+                Row(modifier = Modifier.padding(padding).fillMaxSize()) {
+                    // ログデータを渡す
+                    LogConsole(
+                        logs = logLines,
+                        modifier = Modifier.weight(1f)
+                    )
+                    UtilitySideBar()
+                }
+            }
+        )
+    }
+}
+
+// --- 以下、既存のコンポーザブルをデータ受け取り可能に微修正 ---
+
+@Composable
+fun TopControlBar(adbConnected: Boolean = false) { // 引数追加
+    // ...
+    // デバイス選択ボタンの色を動的に
+    Button(
+        onClick = { /* ... */ },
+        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF3C3F41)),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+    ) {
+        Icon(Icons.Default.PhoneAndroid, contentDescription = null, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(
+            if (adbConnected) "Pixel 8 (Connected)" else "No Device",
+            fontSize = 13.sp,
+            color = if (adbConnected) Color(0xFF6B9F78) else Color.Gray
+        )
+    }
+    // ...
+}
+
+@Composable
+fun LogConsole(logs: List<LogLine>, modifier: Modifier = Modifier) { // 引数変更
+    val listState = rememberLazyListState()
+
+    // 自動スクロール
+    LaunchedEffect(logs.size) {
+        if (logs.isNotEmpty()) {
+            listState.animateScrollToItem(logs.size - 1)
+        }
+    }
+
+    Column(modifier = modifier.background(Color(0xFF1E1F22)).padding(8.dp)) {
+        // ... (Header) ...
+        LazyColumn(state = listState) {
+            items(logs) { log ->
+                // ... (LogLineの表示ロジックは以前と同じ) ...
+                val color = when(log.level) {
+                    LogLevel.INFO -> Color(0xFFBBBBBB)
+                    LogLevel.DEBUG -> Color(0xFF6A8759)
+                    LogLevel.ERROR -> Color(0xFFFF6B68)
+                    LogLevel.PASS -> Color(0xFF59A869)
+                }
+                Text(
+                    text = "${log.timestamp} [${log.tag}] ${log.message}",
+                    color = color,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(vertical = 2.dp)
+                )
+            }
+        }
+    }
+}
+
+/*
 // --- メイン画面 ---
 @Composable
 @Preview
@@ -182,7 +280,7 @@ fun LogConsole(modifier: Modifier = Modifier) {
         }
     }
 }
-
+*/
 // --- 3. ADBユーティリティバー (右端) ---
 @Composable
 fun UtilitySideBar() {
