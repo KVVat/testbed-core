@@ -56,4 +56,31 @@ class AppViewModel : ViewModel() {
             _logFlow.emit(LogLine(timestamp, tag, message, level))
         }
     }
+
+    fun captureScreenshot() {
+        viewModelScope.launch {
+            adbObserver.captureScreenshot()
+        }
+    }
+
+    /**
+     * デバイスにテキストを送信します。
+     * @param text 送信する文字列
+     */
+    fun sendText(text: String) {
+        log("UI", "Requesting to send text...")
+        viewModelScope.launch {
+            adbObserver.sendText(text)
+        }
+    }
+
+    /**
+     * アプリのデータを消去します。
+     */
+    fun clearAppData() {
+        log("UI", "Requesting to clear app data...")
+        viewModelScope.launch {
+            adbObserver.clearAppData("org.example.project")
+        }
+    }
 }

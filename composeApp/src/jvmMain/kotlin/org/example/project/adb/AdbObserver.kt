@@ -10,12 +10,122 @@ import kotlinx.coroutines.withContext
 import org.example.project.AppViewModel // ViewModelのパッケージに合わせてください
 import org.example.project.LogLevel // LogLevelのパッケージに合わせてください
 import org.example.project.adb.rules.AdbDeviceRule
-
+import java.io.File
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+import com.malinskiy.adam.request.sync.v1.PullFileRequest
+import kotlinx.coroutines.channels.consumeEach
+import java.io.FileOutputStream
 class AdbObserver(private val viewModel: AppViewModel) {
 
     var adb: AdbDeviceRule = AdbDeviceRule()
     var adbProps: AdbProps = AdbProps()
 
+// 必要なimportを追加
+
+
+// ...
+
+    suspend fun captureScreenshot() {
+        if (!viewModel.uiState.value.adbIsValid) {
+            viewModel.log("ADB", "Cannot take screenshot: No device connected.", LogLevel.ERROR)
+            return
+        }
+
+        withContext(Dispatchers.IO) {
+            try {
+                viewModel.log("ADB", "Taking screenshot...", LogLevel.INFO)
+
+                val serial = adb.deviceSerial
+                val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
+                val remotePath = "/sdcard/screenshot_tmp.png"
+
+                // 保存先フォルダの作成
+                val localDir = File("screenshots")
+                if (!localDir.exists()) localDir.mkdirs()
+                val localFile = File(localDir, "screenshot_$timestamp.png")
+
+                // 1. デバイス側でPNG保存 (screencap)
+                // -p オプションでPNG形式になります
+                adb.adb.execute(ShellCommandRequest("screencap -p $remotePath"), serial)
+
+                // 2. PCへ転送 (Pull)
+                // PullFileRequest(v1) を使用します。これは ReceiveChannel<ByteArray> を返します。
+                val channel = adb.adb.execute(
+                    PullFileRequest(remotePath,localFile),
+                    this,
+                    serial
+                )
+
+                for (prgress in channel) {
+                    //outputStream.write(chunk)
+                }
+
+                // 3. ストリームからファイルへ書き出し
+                // useブロックを使うことで、処理終了後に自動でストリームを閉じます
+                //FileOutputStream(localFile).use { outputStream ->
+                    // channelからデータ(chunk)が来るたびに書き込
+                //}
+
+                // 4. デバイス側のゴミ掃除
+                adb.adb.execute(ShellCommandRequest("rm $remotePath"), serial)
+
+                viewModel.log("ADB", "Screenshot saved: ${localFile.absolutePath}", LogLevel.PASS)
+
+            } catch (e: Exception) {
+                // エラー詳細を出力
+                viewModel.log("ADB", "Screenshot failed: ${e.javaClass.simpleName} - ${e.message}", LogLevel.ERROR)
+                e.printStackTrace() // デバッグ用
+            }
+        }
+    }
+    
+    /**
+     * デバイスにテキストを送信します。
+     * @param text 送信する文字列
+     */
+    suspend fun sendText(text: String) {
+        if (!viewModel.uiState.value.adbIsValid) {
+            viewModel.log("ADB", "Cannot send text: No device connected.", LogLevel.ERROR)
+            return
+        }
+        // スペースをADBコマンドが認識できる "%s" に置換
+        val escapedText = text.replace(" ", "%s")
+        val request = ShellCommandRequest("input text '$escapedText'")
+        try {
+            val output = adb.adb.execute(request, adb.deviceSerial)
+            if (output.exitCode == 0) {
+                viewModel.log("ADB", "Sent text: '$text'", LogLevel.DEBUG)
+            } else {
+                viewModel.log("ADB", "Failed to send text. Error: ${output.output}", LogLevel.ERROR)
+            }
+        } catch (e: Exception) {
+            viewModel.log("ADB", "Exception while sending text: ${e.message}", LogLevel.ERROR)
+        }
+    }
+
+    /**
+     * 指定されたパッケージのアプリケーションデータを消去します。
+     * @param packageName アプリのパッケージ名
+     */
+    suspend fun clearAppData(packageName: String) {
+        if (!viewModel.uiState.value.adbIsValid) {
+            viewModel.log("ADB", "Cannot clear app data: No device connected.", LogLevel.ERROR)
+            return
+        }
+        val request = ShellCommandRequest("pm clear $packageName")
+        try {
+            val output = adb.adb.execute(request, adb.deviceSerial)
+            if (output.output.contains("Success")) {
+                viewModel.log("ADB", "Cleared app data for $packageName", LogLevel.INFO)
+            } else {
+                viewModel.log("ADB", "Failed to clear app data. Error: ${output.output}", LogLevel.ERROR)
+            }
+        } catch (e: Exception) {
+            viewModel.log("ADB", "Exception while clearing app data: ${e.message}", LogLevel.ERROR)
+        }
+    }
+    
     suspend fun observeAdb() {
         // コルーチンがキャンセルされない限り、永遠に「接続待ち」と「監視」を繰り返す
         while (currentCoroutineContext().isActive) {
@@ -48,7 +158,7 @@ class AdbObserver(private val viewModel: AppViewModel) {
                     if (isDeviceInit) {
                         // 未接続 -> 接続 への状態変化検知
                         if (!viewModel.uiState.value.adbIsValid) {
-                            viewModel.log("ADB", "Device Connected: ${adb.deviceSerial} (${adb.displayId})", LogLevel.PASS)
+                            viewModel.log("ADB", "Device Connected: ${adb.deviceSerial} (${adb.displayId.trimEnd()})", LogLevel.PASS)
 
                             adbProps = AdbProps(
                                 adb.osversion,
@@ -95,121 +205,3 @@ class AdbObserver(private val viewModel: AppViewModel) {
         }
     }
 }
-
-/*
-import com.malinskiy.adam.exception.RequestRejectedException
-import com.malinskiy.adam.request.shell.v1.ShellCommandRequest
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import org.example.project.AppViewModel
-import org.example.project.adb.rules.AdbDeviceRule
-import org.example.project.LogLevel
-
-class AdbObserver(private val viewModel: AppViewModel) { // ViewModelを受け取るように変更
-
-    // TestRuleとしてではなく、単なるヘルパーとしてインスタンス化
-    var adb: AdbDeviceRule = AdbDeviceRule()
-    var adbProps: AdbProps = AdbProps()
-
-    suspend fun observeAdb(): Boolean {
-        withContext(Dispatchers.IO) {
-            try {
-                viewModel.log("ADB", "Initializing ADB client...", LogLevel.DEBUG)
-                adb.startAlone() // 初回の起動試行
-
-                while (true) {
-                    Thread.sleep(1000) // ループ間隔を少し広げました(250ms -> 1000ms)
-
-                    // テスト実行中は監視をスキップする場合
-                    if (viewModel.uiState.value.isRunning) continue
-
-                    val isDeviceInit = try {
-                        adb.isDeviceInitialised()
-                    } catch (e: Exception) { false }
-
-                    try {
-                        if (isDeviceInit) {
-                            // 未接続状態から接続状態に変わった場合の処理
-                            if (!viewModel.uiState.value.adbIsValid) {
-                                viewModel.log("ADB", "Device Connected > ${adb.deviceSerial} / ${adb.displayId}", LogLevel.PASS)
-                                adbProps = AdbProps(
-                                    adb.osversion,
-                                    adb.productmodel,
-                                    adb.deviceSerial,
-                                    adb.displayId
-                                )
-                                viewModel.toggleAdbIsValid(true)
-                            }
-
-                            // Heartbeat (echo)
-                            adb.adb.execute(ShellCommandRequest("echo"), adb.deviceSerial)
-                        } else {
-                            // 初期化されていない場合は再接続を試みる
-                            adb.startAlone()
-                        }
-                    } catch (rrException: RequestRejectedException) {
-                        viewModel.log("ADB", "Request Rejected: ${rrException.message}", LogLevel.ERROR)
-                        // リセットが必要ならここで
-                        continue
-                    } catch (e: Exception) {
-                        // 切断検知など
-                        if (viewModel.uiState.value.adbIsValid) {
-                            viewModel.log("ADB", "Device Disconnected: ${e.message}", LogLevel.ERROR)
-                            adbProps = AdbProps()
-                            viewModel.toggleAdbIsValid(false)
-                        }
-                        // 再接続トライ
-                        try { adb.startAlone() } catch (_: Exception) {}
-                    }
-                }
-            } catch (anyException: Exception) {
-                viewModel.log("ADB", "Fatal Observer Error: ${anyException.message}", LogLevel.ERROR)
-            }
-        }
-        return true
-    }
-}
-/*
-class AdbObserver(private val viewModel: AppViewModel){
-    var adb: AdbDeviceRule = AdbDeviceRule()
-    var adbProps:AdbProps = AdbProps()
-
-    suspend fun observeAdb():Boolean{
-        try {
-            adb.startAlone()
-            while (true) {
-                withContext(Dispatchers.IO) {
-                    Thread.sleep(250)
-                }
-                //if (viewModel.uiState.value.isRunning) continue
-                val isDeviceInit = adb.isDeviceInitialised()
-                try {
-                    if (isDeviceInit) {
-                        if (!viewModel.uiState.value.adbIsValid) {
-                           //logging("Device Connected > ${adb.deviceSerial}/${adb.displayId}")
-                            adbProps = AdbProps(
-                                adb.osversion,
-                                adb.productmodel,
-                                adb.deviceSerial,
-                                adb.displayId
-                            )
-                        }
-                        viewModel.toggleAdbIsValid(true)
-                        adb.adb.execute(ShellCommandRequest("echo"))
-                    }
-                } catch (rrException: RequestRejectedException) {
-                    adb.startAlone()
-                    continue
-                }
-            }
-        } catch (anyException:Exception){
-            //disable if flag is enabled
-            if(viewModel.uiState.value.adbIsValid) {
-                //logging("Device Disconnected > (" + anyException.localizedMessage+") #${anyException.javaClass.name}")
-                adbProps = AdbProps()
-                viewModel.toggleAdbIsValid(false)
-            }
-        }
-        return true
-    }
-}*/
