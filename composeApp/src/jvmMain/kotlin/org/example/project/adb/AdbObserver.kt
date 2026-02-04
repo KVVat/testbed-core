@@ -1,6 +1,8 @@
 package org.example.project.adb
 
 import com.malinskiy.adam.exception.RequestRejectedException
+import com.malinskiy.adam.request.misc.RebootMode
+import com.malinskiy.adam.request.misc.RebootRequest
 import com.malinskiy.adam.request.shell.v1.ShellCommandRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -20,11 +22,6 @@ class AdbObserver(private val viewModel: AppViewModel) {
 
     var adb: AdbDeviceRule = AdbDeviceRule()
     var adbProps: AdbProps = AdbProps()
-
-// 必要なimportを追加
-
-
-// ...
 
     suspend fun captureScreenshot() {
         if (!viewModel.uiState.value.adbIsValid) {
@@ -80,27 +77,35 @@ class AdbObserver(private val viewModel: AppViewModel) {
         }
     }
     
-    /**
-     * デバイスにテキストを送信します。
-     * @param text 送信する文字列
-     */
+    // --- Text Input (修正版) ---
     suspend fun sendText(text: String) {
-        if (!viewModel.uiState.value.adbIsValid) {
-            viewModel.log("ADB", "Cannot send text: No device connected.", LogLevel.ERROR)
-            return
-        }
-        // スペースをADBコマンドが認識できる "%s" に置換
-        val escapedText = text.replace(" ", "%s")
-        val request = ShellCommandRequest("input text '$escapedText'")
-        try {
-            val output = adb.adb.execute(request, adb.deviceSerial)
-            if (output.exitCode == 0) {
-                viewModel.log("ADB", "Sent text: '$text'", LogLevel.DEBUG)
-            } else {
-                viewModel.log("ADB", "Failed to send text. Error: ${output.output}", LogLevel.ERROR)
+        if (!viewModel.uiState.value.adbIsValid) return
+        withContext(Dispatchers.IO) {
+            try {
+                // スペースを %s に置換
+                val escapedText = text.replace(" ", "%s")
+                val command = "input text $escapedText"
+
+                viewModel.log("ADB", "Sending text: $text", LogLevel.INFO)
+
+                // 実行結果を受け取る
+                val result = adb.adb.execute(ShellCommandRequest(command), adb.deviceSerial)
+
+                // exitCode 0 = 成功
+                if (result.exitCode == 0) {
+                    // outputが空でなければ補足情報として表示
+                    if (result.output.isNotBlank()) {
+                        viewModel.log("ADB", "Input Result: ${result.output}", LogLevel.DEBUG)
+                    } else {
+                        viewModel.log("ADB", "Text sent successfully.", LogLevel.PASS)
+                    }
+                } else {
+                    // エラー時は赤文字で詳細を表示
+                    viewModel.log("ADB", "Input Failed (Code ${result.exitCode}): ${result.output}", LogLevel.ERROR)
+                }
+            } catch (e: Exception) {
+                viewModel.log("ADB", "Exception sending text: ${e.message}", LogLevel.ERROR)
             }
-        } catch (e: Exception) {
-            viewModel.log("ADB", "Exception while sending text: ${e.message}", LogLevel.ERROR)
         }
     }
 
@@ -123,6 +128,25 @@ class AdbObserver(private val viewModel: AppViewModel) {
             }
         } catch (e: Exception) {
             viewModel.log("ADB", "Exception while clearing app data: ${e.message}", LogLevel.ERROR)
+        }
+    }
+
+    /**
+     * デバイスをブートローダーモードで再起動します。
+     */
+    suspend fun rebootToBootloader() {
+        if (!viewModel.uiState.value.adbIsValid) {
+            viewModel.log("ADB", "Cannot reboot to bootloader: No device connected.", LogLevel.ERROR)
+            return
+        }
+        withContext(Dispatchers.IO) {
+            try {
+                viewModel.log("ADB", "Rebooting to bootloader...", LogLevel.INFO)
+                adb.adb.execute(RebootRequest(RebootMode.BOOTLOADER), adb.deviceSerial)
+                viewModel.log("ADB", "Reboot command sent.", LogLevel.PASS)
+            } catch (e: Exception) {
+                viewModel.log("ADB", "Failed to reboot to bootloader: ${e.message}", LogLevel.ERROR)
+            }
         }
     }
     

@@ -11,6 +11,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.example.project.adb.AdbObserver
+import org.example.project.adb.FastbootClient
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import java.io.File
 
 class AppViewModel : ViewModel() {
     private val _uiState = MutableStateFlow(AppUiState())
@@ -21,6 +25,7 @@ class AppViewModel : ViewModel() {
 
     // ADB監視クラス (ViewModelが保持し、initで起動)
     private val adbObserver = AdbObserver(this)
+    private val fastbootClient = FastbootClient()
 
     init {
         // ViewModel起動と同時にADB監視を開始
@@ -81,6 +86,56 @@ class AppViewModel : ViewModel() {
         log("UI", "Requesting to clear app data...")
         viewModelScope.launch {
             adbObserver.clearAppData("org.example.project")
+        }
+    }
+
+    /**
+     * Bootイメージの書き込みを一括で行います。
+     * @param imageFile 書き込むbootイメージファイル
+     */
+    fun batchFlashBootImage(imageFile: File) {
+        viewModelScope.launch(Dispatchers.IO) {
+            log("FLASH", "Starting batch flash process for ${imageFile.name}", LogLevel.INFO)
+
+            // 1. adb reboot bootloader
+            log("FLASH", "[1/5] Rebooting to bootloader...", LogLevel.INFO)
+            adbObserver.rebootToBootloader()
+            if (!uiState.value.adbIsValid) {
+                log("FLASH", "ADB device not found. Aborting.", LogLevel.ERROR)
+                return@launch
+            }
+
+            // 2. 10秒待機
+            log("FLASH", "[2/5] Waiting for device to enter bootloader mode (10s)...", LogLevel.INFO)
+            delay(10000)
+
+            // 3. fastboot devices
+            log("FLASH", "[3/5] Detecting device in fastboot mode...", LogLevel.INFO)
+            val devices = fastbootClient.getDevices()
+            if (devices.isEmpty()) {
+                log("FLASH", "No devices found in fastboot mode. Aborting.", LogLevel.ERROR)
+                return@launch
+            }
+            val serial = devices.first()
+            log("FLASH", "Device found: $serial", LogLevel.PASS)
+
+            // 4. fastboot flash boot <image>
+            log("FLASH", "[4/5] Flashing boot partition...", LogLevel.INFO)
+            val flashResult = fastbootClient.flashPartition(serial, "boot", imageFile)
+            if (flashResult.exitCode != 0) {
+                log("FLASH", "Failed to flash boot partition: ${flashResult.output}", LogLevel.ERROR)
+                return@launch
+            }
+            log("FLASH", "Flash successful: ${flashResult.output}", LogLevel.PASS)
+
+            // 5. fastboot reboot
+            log("FLASH", "[5/5] Rebooting device to system...", LogLevel.INFO)
+            val rebootResult = fastbootClient.reboot(serial)
+            if (rebootResult.exitCode != 0) {
+                log("FLASH", "Failed to reboot device: ${rebootResult.output}", LogLevel.ERROR)
+                return@launch
+            }
+            log("FLASH", "Batch flash process completed successfully.", LogLevel.PASS)
         }
     }
 }

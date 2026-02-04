@@ -27,6 +27,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel // 追加: libs.androidx.l
 import org.example.project.AppViewModel
 import org.example.project.LogLevel
 import org.example.project.LogLine
+import java.io.File
 
 // --- データモデル ---
 data class TestPlugin(val id: String, val name: String, val status: String)
@@ -67,7 +68,18 @@ fun App() {
                     UtilitySideBar(
                         onCameraClick = { viewModel.captureScreenshot() },
                         onSendText = { text -> viewModel.sendText(text) },
-                        onClearDataClick = { viewModel.clearAppData() }
+                        onClearDataClick = { viewModel.clearAppData() },
+                        onFlashClick = {
+                            // 仮実装: "boot.img" という名前のファイルを渡す
+                            // TODO: ファイル選択ダイアログを実装する
+                            val dummyFile = File("boot.img")
+                            if (!dummyFile.exists()) {
+                                // ダミーファイルがない場合は作成しておく
+                                dummyFile.createNewFile()
+                                dummyFile.writeText("dummy boot image")
+                            }
+                            viewModel.batchFlashBootImage(dummyFile)
+                        }
                     )
                 }
             }
@@ -133,9 +145,10 @@ fun LogConsole(logs: List<LogLine>, modifier: Modifier = Modifier) { // 引数�
 
 // --- 3. ADBユーティリティバー (右端) ---
 @Composable
-fun UtilitySideBar(onCameraClick: () -> Unit = {},
-        onSendText: (String) -> Unit,
-        onClearDataClick: () -> Unit
+fun UtilitySideBar(onCameraClick: () -> Unit,
+                   onSendText: (String) -> Unit,
+                   onClearDataClick: () -> Unit,
+                   onFlashClick: () -> Unit
 ) {
     var showInputTextDialog by remember { mutableStateOf(false) }
 
@@ -161,9 +174,7 @@ fun UtilitySideBar(onCameraClick: () -> Unit = {},
         Spacer(Modifier.height(16.dp))
 
         // Screenshot Button
-        UtilityIcon(Icons.Default.CameraAlt, "Screenshot") {
-            onCameraClick() // ここで実行！
-        }
+        UtilityIcon(Icons.Default.CameraAlt, "Screenshot", onClick = onCameraClick)
 
         Spacer(Modifier.height(16.dp))
 
@@ -175,10 +186,13 @@ fun UtilitySideBar(onCameraClick: () -> Unit = {},
         Spacer(Modifier.height(16.dp))
 
         // Clear Data Button
-        UtilityIcon(Icons.Default.DeleteSweep, "Clear App Data") {
-            // Action: adb shell pm clear...
-            onClearDataClick()
-        }
+        UtilityIcon(Icons.Default.DeleteSweep, "Clear App Data", onClick = onClearDataClick)
+
+        Spacer(Modifier.height(16.dp))
+
+        // Flash Image Button
+        UtilityIcon(Icons.Default.FlashOn, "Flash Boot Image", onClick = onFlashClick)
+
 
         Spacer(Modifier.weight(1f))
 
@@ -230,7 +244,7 @@ fun InputTextDialog(onDismiss: () -> Unit,onSend: (String) -> Unit) {
                 )
                 Spacer(Modifier.height(16.dp))
                 Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                    Button(onClick = { /* adb shell input text ... */ onSend(text)}) {
+                    Button(onClick = { onSend(text) }) {
                         Text("Send")
                     }
                 }
