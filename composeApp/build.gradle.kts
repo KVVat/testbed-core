@@ -9,7 +9,6 @@ plugins {
 
 kotlin {
     jvm()
-
     sourceSets {
         commonMain.dependencies {
             implementation(libs.compose.runtime)
@@ -20,6 +19,10 @@ kotlin {
             implementation(libs.compose.uiToolingPreview)
             implementation(libs.androidx.lifecycle.viewmodelCompose)
             implementation(libs.androidx.lifecycle.runtimeCompose)
+
+            implementation("junit:junit:4.13.2")
+            implementation("com.malinskiy.adam:adam:0.5.10")
+
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
