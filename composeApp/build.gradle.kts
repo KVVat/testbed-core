@@ -20,16 +20,17 @@ kotlin {
             implementation(libs.androidx.lifecycle.viewmodelCompose)
             implementation(libs.androidx.lifecycle.runtimeCompose)
 
-            implementation("junit:junit:4.13.2")
-            implementation("com.malinskiy.adam:adam:0.5.10")
-
+            implementation(libs.adam)
+            implementation(libs.junit) // commonMainでJUnitを利用可能にする
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
+            implementation(libs.junit)
         }
         jvmMain.dependencies {
             implementation(compose.desktop.currentOs)
             implementation(libs.kotlinx.coroutinesSwing)
+            // AdbDeviceRule.kt が jvmMain にあるが、JUnitはcommonMainで提供されるため不要
         }
     }
 }

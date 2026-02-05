@@ -1,5 +1,6 @@
 package org.example.project.adb
 
+import androidx.lifecycle.viewModelScope
 import com.malinskiy.adam.exception.RequestRejectedException
 import com.malinskiy.adam.request.misc.RebootMode
 import com.malinskiy.adam.request.misc.RebootRequest
@@ -18,10 +19,17 @@ import java.time.format.DateTimeFormatter
 import com.malinskiy.adam.request.sync.v1.PullFileRequest
 import kotlinx.coroutines.channels.consumeEach
 import java.io.FileOutputStream
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import com.malinskiy.adam.request.logcat.ChanneledLogcatRequest
+import kotlinx.coroutines.channels.ReceiveChannel
+
 class AdbObserver(private val viewModel: AppViewModel) {
 
     var adb: AdbDeviceRule = AdbDeviceRule()
     var adbProps: AdbProps = AdbProps()
+    private var logcatJob: Job? = null
+
 
     suspend fun captureScreenshot() {
         if (!viewModel.uiState.value.adbIsValid) {
@@ -96,7 +104,8 @@ class AdbObserver(private val viewModel: AppViewModel) {
                     // outputが空でなければ補足情報として表示
                     if (result.output.isNotBlank()) {
                         viewModel.log("ADB", "Input Result: ${result.output}", LogLevel.DEBUG)
-                    } else {
+                    }
+                    else {
                         viewModel.log("ADB", "Text sent successfully.", LogLevel.PASS)
                     }
                 } else {
@@ -161,6 +170,50 @@ class AdbObserver(private val viewModel: AppViewModel) {
             }
         }
     }
+
+    /**
+     * Logcatのストリームを開始し、ViewModelに各行を渡します。
+     */
+    suspend fun startLogcat() {
+        val serial = adb.deviceSerial
+        if (!viewModel.uiState.value.adbIsValid || serial.isBlank()) {
+            viewModel.log("Logcat", "Cannot start logcat: No device connected or serial unknown.", LogLevel.ERROR)
+            return
+        }
+        if (logcatJob?.isActive == true) {
+            viewModel.log("Logcat", "Logcat is already running.", LogLevel.INFO)
+            return
+        }
+
+        logcatJob = viewModel.viewModelScope.launch(Dispatchers.IO) {
+            try {
+                // ChanneledLogcatRequestを使用し、execute()でReceiveChannel<String>としてログを受け取る
+                val logChannel: ReceiveChannel<String> = adb.adb.execute(
+                    request = ChanneledLogcatRequest(), 
+                    serial = serial,
+                    scope = this
+                )
+                logChannel.consumeEach { line -> // ReceiveChannelをconsumeEachで処理
+                    if (line.isNotBlank()) {
+                        viewModel.onLogcatReceived(line)
+                    }
+                }
+            } catch (e: Exception) {
+                if (e !is kotlinx.coroutines.CancellationException) {
+                    viewModel.log("Logcat", "Logcat stream error: ${e.message}", LogLevel.ERROR)
+                }
+            }
+        }
+    }
+
+    /**
+     * 実行中のLogcatストリームを停止します。
+     */
+    fun stopLogcat() {
+        logcatJob?.cancel()
+        logcatJob = null
+    }
+    
     suspend fun observeAdb() {
         // コルーチンがキャンセルされない限り、永遠に「接続待ち」と「監視」を繰り返す
         while (currentCoroutineContext().isActive) {
@@ -209,7 +262,7 @@ class AdbObserver(private val viewModel: AppViewModel) {
                             // ここでコマンドを実行し、失敗したら RequestRejectedException 等が出る
                             adb.adb.execute(ShellCommandRequest("echo"), adb.deviceSerial)
                         } catch (rrException: RequestRejectedException) {
-                            // 【修正点】ここで握りつぶさず、外側のcatchへ投げる
+                            // 【修正点】ここで握つぶさず、外側のcatchへ投げる
                             throw rrException
                         }
                     } else {

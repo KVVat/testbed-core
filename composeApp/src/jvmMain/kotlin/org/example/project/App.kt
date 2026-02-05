@@ -1,3 +1,5 @@
+package org.example.project
+
 import androidx.compose.desktop.ui.tooling.preview.Preview
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -8,7 +10,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.*
-import androidx.compose.material.Icon
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
@@ -23,11 +24,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import androidx.lifecycle.viewmodel.compose.viewModel // 追加: libs.androidx.lifecycle.viewmodelCompose が必要
+import androidx.lifecycle.viewmodel.compose.viewModel
 import org.example.project.AppViewModel
 import org.example.project.LogLevel
 import org.example.project.LogLine
-import org.jetbrains.compose.resources.imageResource
 import java.io.File
 
 // --- データモデル ---
@@ -50,6 +50,7 @@ fun App() {
 
     // UIステートの監視 (ボタンの色変えなどに使用)
     val uiState by viewModel.uiState.collectAsState()
+    val isLogcatWindowOpen by viewModel.isLogcatWindowOpen.collectAsState()
 
     MaterialTheme(colors = darkColors()) {
         Scaffold(
@@ -60,7 +61,6 @@ fun App() {
                     onBackClick = { viewModel.pressBack() },
                     onHomeClick = { viewModel.pressHome() },
                     onSendText = { text -> viewModel.sendText(text) },
-                    //onOpenEditorClick = { viewModel.openSmsEditor() },
                     onScreenshotClick = { viewModel.captureScreenshot() }
                 )
             },
@@ -74,13 +74,11 @@ fun App() {
                     // UtilitySideBar は引数が減りました
                     UtilitySideBar(
                         onLogcatClick = { enable ->
-                            /*if (enable) {
+                            if (enable) {
                                 viewModel.openLogcatWindow()
-                                viewModel.toggleLogcat(true)
                             } else {
                                 viewModel.closeLogcatWindow()
-                                viewModel.toggleLogcat(false)
-                            }*/
+                            }
                         },
                         onFileExplorerClick = { /*viewModel.openFileExplorer()*/ },
                         onFlashClick = { file -> viewModel.batchFlashBootImage(file) },
@@ -88,6 +86,14 @@ fun App() {
                     )
                 }
             }
+        )
+    }
+
+    // Logcat Monitor Window
+    if (isLogcatWindowOpen) {
+        LogcatWindow(
+            viewModel = viewModel,
+            onCloseRequest = { viewModel.closeLogcatWindow() }
         )
     }
 }
