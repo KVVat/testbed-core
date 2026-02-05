@@ -27,6 +27,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel // 追加: libs.androidx.l
 import org.example.project.AppViewModel
 import org.example.project.LogLevel
 import org.example.project.LogLine
+import org.jetbrains.compose.resources.imageResource
 import java.io.File
 
 // --- データモデル ---
@@ -52,36 +53,38 @@ fun App() {
 
     MaterialTheme(colors = darkColors()) {
         Scaffold(
+            // TopControlBar にアクションを渡す
             topBar = {
                 TopControlBar(
-                    // ViewModelの状態を渡す
-                    adbConnected = uiState.adbIsValid
+                    adbConnected = uiState.adbIsValid,
+                    onBackClick = { viewModel.pressBack() },
+                    onHomeClick = { viewModel.pressHome() },
+                    onSendText = { text -> viewModel.sendText(text) },
+                    //onOpenEditorClick = { viewModel.openSmsEditor() },
+                    onScreenshotClick = { viewModel.captureScreenshot() }
                 )
             },
             content = { padding ->
                 Row(modifier = Modifier.padding(padding).fillMaxSize()) {
-                    // ログデータを渡す
                     LogConsole(
                         logs = logLines,
                         modifier = Modifier.weight(1f)
                     )
+
+                    // UtilitySideBar は引数が減りました
                     UtilitySideBar(
-                        onCameraClick = { viewModel.captureScreenshot() },
-                        onSendText = { text -> viewModel.sendText(text) },
-                        onClearDataClick = { viewModel.clearAppData() },
-                        onFlashClick = {
-                            // 仮実装: "boot.img" という名前のファイルを渡す
-                            // TODO: ファイル選択ダイアログを実装する
-                            val dummyFile = File("boot.img")
-                            if (!dummyFile.exists()) {
-                                // ダミーファイルがない場合は作成しておく
-                                dummyFile.createNewFile()
-                                dummyFile.writeText("dummy boot image")
-                            }
-                            viewModel.batchFlashBootImage(dummyFile)
+                        onLogcatClick = { enable ->
+                            /*if (enable) {
+                                viewModel.openLogcatWindow()
+                                viewModel.toggleLogcat(true)
+                            } else {
+                                viewModel.closeLogcatWindow()
+                                viewModel.toggleLogcat(false)
+                            }*/
                         },
-                        onHomeClick = { viewModel.pressHome() },
-                        onBackClick = { viewModel.pressBack() }
+                        onFileExplorerClick = { /*viewModel.openFileExplorer()*/ },
+                        onFlashClick = { file -> viewModel.batchFlashBootImage(file) },
+                        onClearDataClick = { viewModel.clearAppData() }
                     )
                 }
             }
@@ -91,24 +94,67 @@ fun App() {
 
 // --- 以下、既存のコンポーザブルをデータ受け取り可能に微修正 ---
 
+
 @Composable
-fun TopControlBar(adbConnected: Boolean = false) { // 引数追加
-    // ...
-    // デバイス選択ボタンの色を動的に
-    Button(
-        onClick = { /* ... */ },
-        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF3C3F41)),
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-    ) {
-        Icon(Icons.Default.PhoneAndroid, contentDescription = null, modifier = Modifier.size(16.dp))
-        Spacer(Modifier.width(8.dp))
-        Text(
-            if (adbConnected) "Pixel 8 (Connected)" else "No Device",
-            fontSize = 13.sp,
-            color = if (adbConnected) Color(0xFF6B9F78) else Color.Gray
-        )
-    }
-    // ...
+fun TopControlBar(
+    adbConnected: Boolean,
+    onBackClick: () -> Unit,
+    onHomeClick: () -> Unit,
+    onSendText: (String) -> Unit,
+    onScreenshotClick: () -> Unit
+) {
+    TopAppBar(
+        backgroundColor = Color(0xFF2B2D30),
+        contentColor = Color.White,
+        elevation = 0.dp,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.PhoneAndroid,
+                    contentDescription = null,
+                    tint = if (adbConnected) Color(0xFF6B9F78) else Color.Gray,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = if (adbConnected) "Pixel 8 (Active)" else "Disconnected",
+                    fontSize = 14.sp,
+                    color = Color.LightGray
+                )
+            }
+        },
+        actions = {
+            // --- 右側に配置するアクションボタン群 ---
+
+            // 1. ナビゲーション (Back / Home)
+            IconButton(onClick = onBackClick) { Icon(Icons.Default.ArrowBack, "Back") }
+            IconButton(onClick = onHomeClick) { Icon(Icons.Default.Home, "Home") }
+
+            Divider(Modifier.height(24.dp).width(1.dp).padding(horizontal = 8.dp), color = Color.Gray)
+
+            // 2. 入力系 (エディタ起動 / テキスト送信)
+            //IconButton(onClick = onOpenEditorClick) { Icon(Icons.Default.Edit, "Open Editor") }
+
+            var showInputTextDialog by remember { mutableStateOf(false) }
+            IconButton(onClick = { showInputTextDialog = true }) { Icon(Icons.Default.Keyboard, "Input Text") }
+
+            Divider(Modifier.height(24.dp).width(1.dp).padding(horizontal = 8.dp), color = Color.Gray)
+
+            // 3. ツール (スクショ)
+            IconButton(onClick = onScreenshotClick) { Icon(Icons.Default.CameraAlt, "Screenshot") }
+
+            // テキスト入力ダイアログの制御
+            if (showInputTextDialog) {
+                InputTextDialog(
+                    onDismiss = { showInputTextDialog = false },
+                    onSend = {
+                        onSendText(it)
+                        showInputTextDialog = false
+                    }
+                )
+            }
+        }
+    )
 }
 
 @Composable
@@ -147,89 +193,64 @@ fun LogConsole(logs: List<LogLine>, modifier: Modifier = Modifier) { // 引数�
 
 // --- 3. ADBユーティリティバー (右端) ---
 @Composable
-fun UtilitySideBar(onCameraClick: () -> Unit,
-                   onSendText: (String) -> Unit,
-                   onClearDataClick: () -> Unit,
-                   onFlashClick: () -> Unit,
-                   onHomeClick: () -> Unit,
-                   onBackClick: () -> Unit
+fun UtilitySideBar(
+    onLogcatClick: (Boolean) -> Unit,
+    onFileExplorerClick: () -> Unit,
+    onFlashClick: (File) -> Unit,
+    onClearDataClick: () -> Unit
 ) {
-    var showInputTextDialog by remember { mutableStateOf(false) }
-
     Column(
         modifier = Modifier
             .fillMaxHeight()
-            .width(50.dp)
+            .width(56.dp)
             .background(Color(0xFF2B2D30))
-            // drawWithContentを使って左側に線を描画します
             .drawWithContent {
-                // 最初にコンテンツ（アイコンなど）を描画
                 drawContent()
-                // 次に左端に線を描画
                 drawLine(
                     color = Color(0xFF1E1F22),
-                    start = Offset(0f, 0f), // 左上
-                    end = Offset(0f, size.height), // 左下
+                    start = Offset(0f, 0f),
+                    end = Offset(0f, size.height),
                     strokeWidth = 1.dp.toPx()
                 )
-            },        horizontalAlignment = Alignment.CenterHorizontally,
+            },
+        horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Top
     ) {
         Spacer(Modifier.height(16.dp))
 
-        // Screenshot Button
-        UtilityIcon(Icons.Default.CameraAlt, "Screenshot", onClick = onCameraClick)
-
-        Spacer(Modifier.height(16.dp))
-
-        // Text Input Button
-        UtilityIcon(Icons.Default.Keyboard, "Send Text") {
-            showInputTextDialog = true
+        // Logcat
+        var isLogcatRunning by remember { mutableStateOf(false) }
+        UtilityIcon(
+            icon = if (isLogcatRunning) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+            tooltip = "Logcat Monitor",
+            // = if (isLogcatRunning) Color(0xFF6B9F78) else Color.Gray
+        ) {
+            isLogcatRunning = !isLogcatRunning
+            onLogcatClick(isLogcatRunning)
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(24.dp))
 
-        // Clear Data Button
-        UtilityIcon(Icons.Default.DeleteSweep, "Clear App Data", onClick = onClearDataClick)
+        // File Explorer
+        UtilityIcon(Icons.Default.Folder, "File Explorer") { onFileExplorerClick() }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(24.dp))
 
-        // Flash Image Button
-        UtilityIcon(Icons.Default.FlashOn, "Flash Boot Image", onClick = onFlashClick)
-
+        // Flash (Caution)
+        UtilityIcon(Icons.Default.FlashOn, "Batch Flash") {
+            onFlashClick(File("boot.img"))
+        }
 
         Spacer(Modifier.weight(1f))
 
-        UtilityIcon(Icons.Default.Settings, "Settings") {}
-        Spacer(Modifier.height(16.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly
-        ) {
-            // Back
-            IconButton(onClick = { onBackClick() }) {
-                Icon(Icons.Default.ArrowBack, "Back", tint = Color.Gray)
-            }
-            // Home
-            IconButton(onClick = { onHomeClick() }) {
-                Icon(Icons.Default.Home, "Home", tint = Color.Gray)
-            }
+        // Clear Data (Danger)
+        UtilityIcon(Icons.Default.DeleteSweep, "Clear App Data") {
+            onClearDataClick()
         }
 
         Spacer(Modifier.height(16.dp))
-
-    }
-
-    // テキスト送信ダイアログ（例）
-    if (showInputTextDialog) {
-        InputTextDialog(
-            onDismiss = { showInputTextDialog = false },
-            onSend = { text ->
-                onSendText(text) // 入力されたテキストをViewModelへ送る
-                showInputTextDialog = false
-            }
-        )
+        UtilityIcon(Icons.Default.Settings, "Settings") {}
+        Spacer(Modifier.height(16.dp))
     }
 }
 
