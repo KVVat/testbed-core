@@ -22,6 +22,7 @@ import java.io.FileOutputStream
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import com.malinskiy.adam.request.logcat.ChanneledLogcatRequest
+import com.malinskiy.adam.request.logcat.LogcatReadMode
 import kotlinx.coroutines.channels.ReceiveChannel
 
 class AdbObserver(private val viewModel: AppViewModel) {
@@ -189,7 +190,7 @@ class AdbObserver(private val viewModel: AppViewModel) {
             try {
                 // ChanneledLogcatRequestを使用し、execute()でReceiveChannel<String>としてログを受け取る
                 val logChannel: ReceiveChannel<String> = adb.adb.execute(
-                    request = ChanneledLogcatRequest(), 
+                    request = ChanneledLogcatRequest(modes = listOf(LogcatReadMode.threadtime)),
                     serial = serial,
                     scope = this
                 )

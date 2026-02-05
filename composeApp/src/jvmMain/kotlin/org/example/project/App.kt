@@ -30,7 +30,6 @@ import org.example.project.LogLevel
 import org.example.project.LogLine
 import java.io.File
 
-// --- データモデル ---
 data class TestPlugin(val id: String, val name: String, val status: String)
 
 @Composable
@@ -164,10 +163,9 @@ fun TopControlBar(
 }
 
 @Composable
-fun LogConsole(logs: List<LogLine>, modifier: Modifier = Modifier) { // 引数変更
+fun LogConsole(logs: List<LogLine>, modifier: Modifier = Modifier) {
     val listState = rememberLazyListState()
 
-    // 自動スクロール
     LaunchedEffect(logs.size) {
         if (logs.isNotEmpty()) {
             listState.animateScrollToItem(logs.size - 1)
@@ -175,28 +173,69 @@ fun LogConsole(logs: List<LogLine>, modifier: Modifier = Modifier) { // 引数�
     }
 
     Column(modifier = modifier.background(Color(0xFF1E1F22)).padding(8.dp)) {
-        // ... (Header) ...
         LazyColumn(state = listState) {
             items(logs) { log ->
-                // ... (LogLineの表示ロジックは以前と同じ) ...
-                val color = when(log.level) {
-                    LogLevel.INFO -> Color(0xFFBBBBBB)
-                    LogLevel.DEBUG -> Color(0xFF6A8759)
-                    LogLevel.ERROR -> Color(0xFFFF6B68)
-                    LogLevel.PASS -> Color(0xFF59A869)
-                }
-                Text(
-                    text = "${log.timestamp} [${log.tag}] ${log.message}",
-                    color = color,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 13.sp,
-                    modifier = Modifier.padding(vertical = 2.dp)
-                )
+                LogLineItem(log) // 描画ロジックを分離して見やすく
             }
         }
     }
 }
 
+@Composable
+fun LogLineItem(log: LogLine) {
+    // ログレベルごとの色定義
+    val levelColor = when(log.level) {
+        LogLevel.INFO -> Color(0xFFBBBBBB)  // グレー
+        LogLevel.DEBUG -> Color(0xFF569CD6) // 青 (VSCode風)
+        LogLevel.WARN -> Color(0xFFFFC66D)  // 黄 (IntelliJ風)
+        LogLevel.ERROR -> Color(0xFFFF6B68) // 赤
+        LogLevel.PASS -> Color(0xFF6A8759)  // 緑
+    }
+
+    // 表示する文字 (I, D, W, E, P)
+    val levelChar = when(log.level) {
+        LogLevel.INFO -> "I"
+        LogLevel.DEBUG -> "D"
+        LogLevel.WARN -> "W"
+        LogLevel.ERROR -> "E"
+        LogLevel.PASS -> "P"
+    }
+
+    Row(
+        modifier = Modifier.padding(vertical = 1.dp),
+        verticalAlignment = Alignment.Top // 複数行メッセージでもバッジは上に固定
+    ) {
+        // [反転文字バッジ]
+        Surface(
+            color = levelColor, // 背景色をレベル色に
+            shape = RoundedCornerShape(4.dp), // 少し角を丸める
+            modifier = Modifier
+                .size(20.dp) // 正方形のサイズ
+                .padding(top = 1.dp) // テキストの高さと微妙に合わせる
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Text(
+                    text = levelChar,
+                    color = Color(0xFF1E1F22), // 文字色は背景のダークグレーと同じにして「抜き文字」風に
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.width(8.dp))
+
+        // [ログ本文]
+        Text(
+            text = "${log.timestamp} [${log.tag}] ${log.message}",
+            color = levelColor, // 本文も色を合わせる（白がいい場合は Color.White に変更可）
+            fontFamily = FontFamily.Monospace,
+            fontSize = 13.sp,
+            lineHeight = 18.sp // 行間を少し広げて読みやすく
+        )
+    }
+}
 // --- 3. ADBユーティリティバー (右端) ---
 @Composable
 fun UtilitySideBar(

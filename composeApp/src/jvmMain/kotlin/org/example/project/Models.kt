@@ -10,7 +10,7 @@ data class LogLine(
 )
 
 enum class LogLevel {
-    INFO, DEBUG, ERROR, PASS
+    INFO, DEBUG, ERROR, PASS,WARN
 }
 
 // ついでにこれもここに移動しておくとスッキリします
