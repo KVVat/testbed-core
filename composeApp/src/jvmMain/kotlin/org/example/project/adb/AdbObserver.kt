@@ -149,7 +149,18 @@ class AdbObserver(private val viewModel: AppViewModel) {
             }
         }
     }
-    
+    // --- Key Events ---
+    suspend fun sendKeyEvent(keyCode: Int) {
+        if (!viewModel.uiState.value.adbIsValid) return
+        withContext(Dispatchers.IO) {
+            try {
+                viewModel.log("ADB", "Sending Key Event: $keyCode", LogLevel.INFO)
+                adb.adb.execute(ShellCommandRequest("input keyevent $keyCode"), adb.deviceSerial)
+            } catch (e: Exception) {
+                viewModel.log("ADB", "Failed to send key $keyCode: ${e.message}", LogLevel.ERROR)
+            }
+        }
+    }
     suspend fun observeAdb() {
         // コルーチンがキャンセルされない限り、永遠に「接続待ち」と「監視」を繰り返す
         while (currentCoroutineContext().isActive) {

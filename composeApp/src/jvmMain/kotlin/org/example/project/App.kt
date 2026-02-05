@@ -79,7 +79,9 @@ fun App() {
                                 dummyFile.writeText("dummy boot image")
                             }
                             viewModel.batchFlashBootImage(dummyFile)
-                        }
+                        },
+                        onHomeClick = { viewModel.pressHome() },
+                        onBackClick = { viewModel.pressBack() }
                     )
                 }
             }
@@ -148,7 +150,9 @@ fun LogConsole(logs: List<LogLine>, modifier: Modifier = Modifier) { // 引数�
 fun UtilitySideBar(onCameraClick: () -> Unit,
                    onSendText: (String) -> Unit,
                    onClearDataClick: () -> Unit,
-                   onFlashClick: () -> Unit
+                   onFlashClick: () -> Unit,
+                   onHomeClick: () -> Unit,
+                   onBackClick: () -> Unit
 ) {
     var showInputTextDialog by remember { mutableStateOf(false) }
 
@@ -198,6 +202,23 @@ fun UtilitySideBar(onCameraClick: () -> Unit,
 
         UtilityIcon(Icons.Default.Settings, "Settings") {}
         Spacer(Modifier.height(16.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            // Back
+            IconButton(onClick = { onBackClick() }) {
+                Icon(Icons.Default.ArrowBack, "Back", tint = Color.Gray)
+            }
+            // Home
+            IconButton(onClick = { onHomeClick() }) {
+                Icon(Icons.Default.Home, "Home", tint = Color.Gray)
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
     }
 
     // テキスト送信ダイアログ（例）

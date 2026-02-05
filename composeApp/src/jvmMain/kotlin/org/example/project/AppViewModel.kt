@@ -32,6 +32,10 @@ class AppViewModel : ViewModel() {
         startAdbObservation()
     }
 
+    fun pressHome() = viewModelScope.launch { adbObserver.sendKeyEvent(3) }  // KEYCODE_HOME
+    fun pressBack() = viewModelScope.launch { adbObserver.sendKeyEvent(4) }  // KEYCODE_BACK
+    fun pressEnter() = viewModelScope.launch { adbObserver.sendKeyEvent(66) } // KEYCODE_ENTER
+
     private fun startAdbObservation() {
         viewModelScope.launch {
             log("SYSTEM", "Starting ADB Observer...", LogLevel.INFO)
