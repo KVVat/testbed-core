@@ -15,19 +15,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import java.io.File
 import java.io.FileOutputStream
-import java.nio.file.Paths
+import java.net.URLClassLoader
+import java.util.jar.JarFile
 import androidx.compose.runtime.mutableStateListOf
 import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Properties
-
-// 正確なパッケージパスを指定
 import org.example.project.junit.xmlreport.AntXmlRunListener
 import org.example.project.junit.JUnitTestRunner
 
-// テストクラスからアプリ本体のログ機能へアクセスするためのブリッジ
 object JUnitBridge {
     var logging: ((String) -> Unit)? = null
 }
@@ -63,18 +61,57 @@ class AppViewModel : ViewModel() {
     private val fastbootClient = FastbootClient()
 
     private val RAW_LOGCAT_FILE = File("raw_logcat_output.log")
+    private val PLUGINS_DIR = File("plugins")
 
     init {
         startAdbObservation()
-        // ブリッジにログ関数を登録
         JUnitBridge.logging = ::logging
 
-        try {
-            // sampleパッケージ内のテストを登録
-            val testClass = Class.forName("org.example.project.sample.ComposeAppDesktopTest")
-            _testPlugins.add(TestPlugin("sample_01", "Sample Desktop Test", testClass, "SampleTest", "Ready"))
-        } catch (e: Exception) {
-            println("Sample Test class not found: ${e.message}")
+        // 起動時にプラグインディレクトリからJARをロード
+        loadPluginsFromDir()
+    }
+
+    /**
+     * pluginsディレクトリ内のJARファイルをスキャンし、テストクラスをロードします。
+     */
+    fun loadPluginsFromDir() {
+        if (!PLUGINS_DIR.exists()) PLUGINS_DIR.mkdirs()
+
+        val jarFiles = PLUGINS_DIR.listFiles { file -> file.extension == "jar" } ?: return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            jarFiles.forEach { jarFile ->
+                try {
+                    val loader = URLClassLoader(arrayOf(jarFile.toURI().toURL()), this.javaClass.classLoader)
+                    JarFile(jarFile).use { jar ->
+                        val entries = jar.entries()
+                        while (entries.hasMoreElements()) {
+                            val entry = entries.nextElement()
+                            if (entry.name.endsWith(".class")) {
+                                val className = entry.name.replace("/", ".").removeSuffix(".class")
+                                try {
+                                    val clazz = loader.loadClass(className)
+                                    // JUnit 4の @Test アノテーションを持つメソッドがあるか確認
+                                    if (clazz.methods.any { it.isAnnotationPresent(org.junit.Test::class.java) }) {
+                                        withContext(Dispatchers.Main) {
+                                            if (_testPlugins.none { it.clazz == clazz }) {
+                                                _testPlugins.add(TestPlugin(
+                                                    id = jarFile.nameWithoutExtension,
+                                                    name = clazz.simpleName,
+                                                    clazz = clazz,
+                                                    shortName = clazz.simpleName
+                                                ))
+                                            }
+                                        }
+                                    }
+                                } catch (e: Throwable) { /* 個別のクラスロード失敗は無視 */ }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    log("SYSTEM", "Failed to load jar: ${jarFile.name}", LogLevel.ERROR)
+                }
+            }
         }
     }
 
@@ -96,7 +133,6 @@ class AppViewModel : ViewModel() {
 
         viewModelScope.launch(Dispatchers.IO) {
             toggleIsRunning(true)
-
             log("TEST", ">>> START: ${plugin.name}", LogLevel.INFO)
 
             val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
@@ -106,7 +142,6 @@ class AppViewModel : ViewModel() {
 
             var fos: FileOutputStream? = null
             try {
-                // 正確なパッケージの AntXmlRunListener を使用
                 val antRunner = AntXmlRunListener(::logging, props) {
                     viewModelScope.launch {
                         toggleIsRunning(false)
@@ -118,29 +153,28 @@ class AppViewModel : ViewModel() {
                 fos = FileOutputStream(reportFile)
                 antRunner.setOutputStream(fos)
 
-                // JUnitTestRunner を使用して実行
-                val runner = JUnitTestRunner(arrayOf(plugin.clazz), antRunner)
+                // クラスローダーを現在のスレッドのコンテキストに設定（JAR内のリソース解決用）
+                val originalClassLoader = Thread.currentThread().contextClassLoader
+                Thread.currentThread().contextClassLoader = plugin.clazz.classLoader
 
-                // 実行 (同期実行を想定)
-                runner.start()
+                try {
+                    val runner = JUnitTestRunner(arrayOf(plugin.clazz), antRunner)
+                    runner.start()
+                } finally {
+                    Thread.currentThread().contextClassLoader = originalClassLoader
+                }
 
-                // XMLファイルを確実にディスクに書き出す
                 fos.flush()
-
             } catch (e: Exception) {
-                log("TEST", "ERROR during execution: ${e.message}", LogLevel.ERROR)
+                log("TEST", "ERROR: ${e.message}", LogLevel.ERROR)
                 toggleIsRunning(false)
             } finally {
-                try {
-                    fos?.close()
-                } catch (e: Exception) {
-                    // クローズ時の例外はログに出すのみ
-                }
+                try { fos?.close() } catch (e: Exception) {}
             }
         }
     }
 
-    // --- 既存のメソッド（省略せず維持） ---
+    // --- 既存のADB/UIロジック（完全に維持） ---
 
     fun pressHome() = viewModelScope.launch { adbObserver.sendKeyEvent(3) }
     fun pressBack() = viewModelScope.launch { adbObserver.sendKeyEvent(4) }
@@ -186,4 +220,3 @@ class AppViewModel : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) { try { RAW_LOGCAT_FILE.appendText(line + "\n") } catch (e: IOException) {} }
     }
 }
-
