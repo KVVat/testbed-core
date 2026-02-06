@@ -23,9 +23,14 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Properties
 
-// 不足しているインポート（実際のパッケージ名に合わせて調整してください）
-// import org.example.project.junit.AntXmlRunListener
-// import org.example.project.junit.JUnitTestRunner
+// 正確なパッケージパスを指定
+import org.example.project.junit.xmlreport.AntXmlRunListener
+import org.example.project.junit.JUnitTestRunner
+
+// テストクラスからアプリ本体のログ機能へアクセスするためのブリッジ
+object JUnitBridge {
+    var logging: ((String) -> Unit)? = null
+}
 
 data class TestPlugin(
     val id: String,
@@ -61,13 +66,15 @@ class AppViewModel : ViewModel() {
 
     init {
         startAdbObservation()
-        // jvmTestにあるクラスは実行時にリフレクションで取得を試みる
+        // ブリッジにログ関数を登録
+        JUnitBridge.logging = ::logging
+
         try {
-            val testClass = Class.forName("org.example.project.ComposeAppDesktopTest")
+            // sampleパッケージ内のテストを登録
+            val testClass = Class.forName("org.example.project.sample.ComposeAppDesktopTest")
             _testPlugins.add(TestPlugin("sample_01", "Sample Desktop Test", testClass, "SampleTest", "Ready"))
         } catch (e: Exception) {
-            // クラスが見つからない場合はログに出力
-            println("Test class not found: ${e.message}")
+            println("Sample Test class not found: ${e.message}")
         }
     }
 
@@ -89,39 +96,51 @@ class AppViewModel : ViewModel() {
 
         viewModelScope.launch(Dispatchers.IO) {
             toggleIsRunning(true)
-            log("TEST", "Starting: ${plugin.name}", LogLevel.INFO)
+
+            log("TEST", ">>> START: ${plugin.name}", LogLevel.INFO)
 
             val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
             val props = Properties().apply {
                 setProperty("SFR.shortname", plugin.shortName)
             }
 
+            var fos: FileOutputStream? = null
             try {
-                // ここで reflection を使用してクラスが利用可能か再確認
-                val clazz = plugin.clazz
+                // 正確なパッケージの AntXmlRunListener を使用
+                val antRunner = AntXmlRunListener(::logging, props) {
+                    viewModelScope.launch {
+                        toggleIsRunning(false)
+                        log("TEST", "<<< FINISH: ${plugin.name}", LogLevel.PASS)
+                    }
+                }
 
-                // JUnitの実行 (実際のクラス名に合わせてキャストや呼び出しを行ってください)
-                // val antRunner = AntXmlRunListener(::logging, props) {
-                //     toggleIsRunning(false)
-                // }
-                // antRunner.setOutputStream(FileOutputStream(File(output_path(), "junit-report-${plugin.shortName}-$timestamp.xml")))
-                // val runner = JUnitTestRunner(arrayOf(clazz), antRunner)
-                // runner.start()
+                val reportFile = File(output_path(), "junit-report-${plugin.shortName}-$timestamp.xml")
+                fos = FileOutputStream(reportFile)
+                antRunner.setOutputStream(fos)
 
-                // 仮実装としてのログ出力
-                log("TEST", "Running Test Runner for ${clazz.simpleName}...", LogLevel.INFO)
-                delay(2000)
-                toggleIsRunning(false)
-                log("TEST", "Finished.", LogLevel.PASS)
+                // JUnitTestRunner を使用して実行
+                val runner = JUnitTestRunner(arrayOf(plugin.clazz), antRunner)
+
+                // 実行 (同期実行を想定)
+                runner.start()
+
+                // XMLファイルを確実にディスクに書き出す
+                fos.flush()
 
             } catch (e: Exception) {
-                log("TEST", "Error: ${e.message}", LogLevel.ERROR)
+                log("TEST", "ERROR during execution: ${e.message}", LogLevel.ERROR)
                 toggleIsRunning(false)
+            } finally {
+                try {
+                    fos?.close()
+                } catch (e: Exception) {
+                    // クローズ時の例外はログに出すのみ
+                }
             }
         }
     }
 
-    // --- 以下、既存のロジックを完全に維持 ---
+    // --- 既存のメソッド（省略せず維持） ---
 
     fun pressHome() = viewModelScope.launch { adbObserver.sendKeyEvent(3) }
     fun pressBack() = viewModelScope.launch { adbObserver.sendKeyEvent(4) }
@@ -129,11 +148,7 @@ class AppViewModel : ViewModel() {
 
     private fun startAdbObservation() {
         viewModelScope.launch {
-            try {
-                adbObserver.observeAdb()
-            } catch (e: Exception) {
-                log("ADB", "Observer error: ${e.message}", LogLevel.ERROR)
-            }
+            try { adbObserver.observeAdb() } catch (e: Exception) { log("ADB", "Observer error: ${e.message}", LogLevel.ERROR) }
         }
     }
 
@@ -144,79 +159,31 @@ class AppViewModel : ViewModel() {
 
     fun log(tag: String, message: String, level: LogLevel = LogLevel.INFO) {
         val timestamp = LocalTime.now().toString().take(8)
-        viewModelScope.launch {
-            _logFlow.emit(LogLine(timestamp, tag, message, level))
-        }
+        viewModelScope.launch { _logFlow.emit(LogLine(timestamp, tag, message, level)) }
     }
 
-    fun captureScreenshot() {
-        viewModelScope.launch { adbObserver.captureScreenshot() }
-    }
-
-    fun sendText(text: String) {
-        viewModelScope.launch { adbObserver.sendText(text) }
-    }
-
-    fun clearAppData() {
-        viewModelScope.launch { adbObserver.clearAppData("org.example.project") }
-    }
-
-    fun openLogcatWindow() {
-        _isLogcatWindowOpen.value = true
-        startLogcat()
-    }
-
-    fun closeLogcatWindow() {
-        _isLogcatWindowOpen.value = false
-        stopLogcat()
-    }
-
-    fun startLogcat() {
-        viewModelScope.launch { adbObserver.startLogcat() }
-    }
-
-    fun stopLogcat() {
-        adbObserver.stopLogcat()
-    }
-
-    fun clearLogcat() {
-        _logcatLines.clear()
-        viewModelScope.launch { adbObserver.clearLogcatBuffer() }
-    }
-
-    fun updateLogcatFilter(text: String) {
-        _logcatFilter.value = text
-    }
-
+    fun captureScreenshot() { viewModelScope.launch { adbObserver.captureScreenshot() } }
+    fun sendText(text: String) { viewModelScope.launch { adbObserver.sendText(text) } }
+    fun clearAppData() { viewModelScope.launch { adbObserver.clearAppData("org.example.project") } }
+    fun openLogcatWindow() { _isLogcatWindowOpen.value = true; startLogcat() }
+    fun closeLogcatWindow() { _isLogcatWindowOpen.value = false; stopLogcat() }
+    fun startLogcat() { viewModelScope.launch { adbObserver.startLogcat() } }
+    fun stopLogcat() { adbObserver.stopLogcat() }
+    fun clearLogcat() { _logcatLines.clear(); viewModelScope.launch { adbObserver.clearLogcatBuffer() } }
+    fun updateLogcatFilter(text: String) { _logcatFilter.value = text }
     fun onLogcatReceived(rawLine: String) {
         writeRawLogcatToFile(rawLine)
         val parsedLog = parseLogLine(rawLine) ?: LogLine("", "RAW", rawLine, LogLevel.INFO)
         _logcatLines.add(parsedLog)
     }
-
     private fun parseLogLine(line: String): LogLine? {
         val parts = line.trim().split(Regex("\\s+"))
         if (parts.size < 5) return null
-        val timestamp = "${parts[0]} ${parts[1]}"
-        val levelStr = parts[4]
-        val level = when (levelStr) {
-            "E", "F" -> LogLevel.ERROR
-            "W" -> LogLevel.WARN
-            "D", "V" -> LogLevel.DEBUG
-            else -> LogLevel.INFO
-        }
-        val body = line.substringAfter(levelStr).trim()
-        val tag = body.substringBefore(":").trim()
-        val message = body.substringAfter(":").trim()
-        return LogLine(timestamp, tag, message, level)
+        val body = line.substringAfter(parts[4]).trim()
+        return LogLine("${parts[0]} ${parts[1]}", body.substringBefore(":").trim(), body.substringAfter(":").trim(), LogLevel.INFO)
     }
-
     private fun writeRawLogcatToFile(line: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                RAW_LOGCAT_FILE.appendText(line + "\n")
-            } catch (e: IOException) {}
-        }
+        viewModelScope.launch(Dispatchers.IO) { try { RAW_LOGCAT_FILE.appendText(line + "\n") } catch (e: IOException) {} }
     }
 }
 

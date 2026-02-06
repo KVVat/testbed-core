@@ -1,334 +1,222 @@
-File: composeApp/src/jvmMain/kotlin/org/example/project/adb/AdbObserver.kt
-package org.example.project.adb
+File: composeApp/src/jvmMain/kotlin/org/example/project/AppViewModel.kt
+package org.example.project
 
+import java.time.LocalTime
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.malinskiy.adam.exception.RequestRejectedException
-import com.malinskiy.adam.request.logcat.ChanneledLogcatRequest
-import com.malinskiy.adam.request.logcat.LogcatReadMode
-import com.malinskiy.adam.request.misc.RebootMode
-import com.malinskiy.adam.request.misc.RebootRequest
-import com.malinskiy.adam.request.shell.v1.ShellCommandRequest
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import org.example.project.adb.AdbObserver
+import org.example.project.adb.FastbootClient
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.withContext
-import org.example.project.AppViewModel
-import org.example.project.LogLevel
-import org.example.project.adb.rules.AdbDeviceRule
 import java.io.File
+import java.io.FileOutputStream
+import java.nio.file.Paths
+import androidx.compose.runtime.mutableStateListOf
+import kotlinx.coroutines.withContext
+import java.io.IOException
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-import com.malinskiy.adam.request.sync.v1.PullFileRequest
-import kotlinx.coroutines.channels.consumeEach
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.channels.ReceiveChannel
+import java.util.Properties
 
-class AdbObserver(private val viewModel: AppViewModel) {
+// 正確なパッケージパスを指定
+import org.example.project.junit.xmlreport.AntXmlRunListener
+import org.example.project.junit.JUnitTestRunner
 
-    var adb: AdbDeviceRule = AdbDeviceRule()
-    var adbProps: AdbProps = AdbProps()
-    private var logcatJob: Job? = null
+// テストクラスからアプリ本体のログ機能へアクセスするためのブリッジ
+object JUnitBridge {
+    var logging: ((String) -> Unit)? = null
+}
 
-    /**
-     * adbバイナリの有効なパスを解決します。
-     * 1. プロジェクトローカル (bin/platform-tools)
-     * 2. 各OSの標準Android SDKパス
-     * 3. システム環境変数 PATH
-     */
-    private fun resolveAdbPath(): String? {
-        val osName = System.getProperty("os.name").lowercase()
-        val adbName = if (osName.contains("win")) "adb.exe" else "adb"
-        val home = System.getProperty("user.home")
+data class TestPlugin(
+    val id: String,
+    val name: String,
+    val clazz: Class<*>,
+    val shortName: String,
+    val status: String = "Ready"
+)
 
-        // 1. プロジェクトローカル
-        val localAdb = File("bin/platform-tools/$adbName")
-        if (localAdb.exists() && localAdb.canExecute()) return localAdb.absolutePath
+class AppViewModel : ViewModel() {
+    private val _uiState = MutableStateFlow(AppUiState())
+    val uiState = _uiState.asStateFlow()
 
-        // 2. OSごとの標準SDKパス
-        val sdkPaths = mutableListOf<String>()
-        when {
-            osName.contains("mac") -> {
-                sdkPaths.add("$home/Library/Android/sdk/platform-tools/$adbName")
-            }
-            osName.contains("win") -> {
-                val localAppData = System.getenv("LOCALAPPDATA")
-                if (localAppData != null) {
-                    sdkPaths.add("$localAppData\\Android\\Sdk\\platform-tools\\$adbName")
-                }
-            }
-            osName.contains("linux") -> {
-                sdkPaths.add("$home/Android/Sdk/platform-tools/$adbName")
-                sdkPaths.add("/usr/lib/android-sdk/platform-tools/$adbName")
-            }
-        }
+    private val _logFlow = MutableSharedFlow<LogLine>(replay = 100)
+    val logFlow = _logFlow.asSharedFlow()
 
-        for (path in sdkPaths) {
-            val file = File(path)
-            if (file.exists() && file.canExecute()) return file.absolutePath
-        }
+    private val _isLogcatWindowOpen = MutableStateFlow(false)
+    val isLogcatWindowOpen = _isLogcatWindowOpen.asStateFlow()
 
-        // 3. システムパスのチェック (which / where)
-        val inPath = try {
-            val checkCmd = if (osName.contains("win")) "where" else "which"
-            val process = ProcessBuilder(checkCmd, adbName).start()
-            if (process.waitFor() == 0) adbName else null
-        } catch (e: Exception) {
-            null
-        }
+    private val _logcatLines = mutableStateListOf<LogLine>()
+    val logcatLines: List<LogLine> get() = _logcatLines
 
-        return inPath
-    }
+    private val _logcatFilter = MutableStateFlow("")
+    val logcatFilter = _logcatFilter.asStateFlow()
 
-    /**
-     * 依存関係のチェックルーチン
-     */
-    fun checkDependencies(): Boolean {
-        val path = resolveAdbPath()
-        if (path == null) {
-            viewModel.log("SETUP", "Critical: 'adb' not found. Run the setup script for your OS.", LogLevel.ERROR)
-            return false
-        }
-        viewModel.log("SETUP", "ADB resolved: $path", LogLevel.PASS)
-        return true
-    }
+    private val _testPlugins = mutableStateListOf<TestPlugin>()
+    val testPlugins: List<TestPlugin> get() = _testPlugins
 
-    suspend fun captureScreenshot() {
-        if (!viewModel.uiState.value.adbIsValid) {
-            viewModel.log("ADB", "Cannot take screenshot: No device connected.", LogLevel.ERROR)
-            return
-        }
-        withContext(Dispatchers.IO) {
-            try {
-                viewModel.log("ADB", "Taking screenshot...", LogLevel.INFO)
-                val serial = adb.deviceSerial
-                val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
-                val remotePath = "/sdcard/screenshot_tmp.png"
-                val localDir = File("screenshots")
-                if (!localDir.exists()) localDir.mkdirs()
-                val localFile = File(localDir, "screenshot_$timestamp.png")
+    private val adbObserver = AdbObserver(this)
+    private val fastbootClient = FastbootClient()
 
-                adb.adb.execute(ShellCommandRequest("screencap -p $remotePath"), serial)
-                val channel = adb.adb.execute(PullFileRequest(remotePath, localFile), this, serial)
-                for (progress in channel) { }
+    private val RAW_LOGCAT_FILE = File("raw_logcat_output.log")
 
-                adb.adb.execute(ShellCommandRequest("rm $remotePath"), serial)
-                viewModel.log("ADB", "Screenshot saved: ${localFile.absolutePath}", LogLevel.PASS)
-            } catch (e: Exception) {
-                viewModel.log("ADB", "Screenshot failed: ${e.message}", LogLevel.ERROR)
-            }
-        }
-    }
+    init {
+        startAdbObservation()
+        // ブリッジにログ関数を登録
+        JUnitBridge.logging = ::logging
 
-    suspend fun sendText(text: String) {
-        if (!viewModel.uiState.value.adbIsValid) return
-        if (text.isBlank()) {
-            viewModel.log("ADB", "Input ignored: Text is empty.", LogLevel.WARN)
-            return
-        }
-        if (text.any { it.code > 127 }) {
-            viewModel.log("ADB", "Input failed: Non-ASCII characters are not supported.", LogLevel.ERROR)
-            return
-        }
-        withContext(Dispatchers.IO) {
-            try {
-                val escapedText = text.replace(" ", "%s")
-                val command = "input text $escapedText"
-                val result = adb.adb.execute(ShellCommandRequest(command), adb.deviceSerial)
-                if (result.exitCode == 0) {
-                    viewModel.log("ADB", "Text sent successfully: $text", LogLevel.PASS)
-                } else {
-                    viewModel.log("ADB", "Input Failed: ${result.output}", LogLevel.ERROR)
-                }
-            } catch (e: Exception) {
-                viewModel.log("ADB", "Exception sending text: ${e.message}", LogLevel.ERROR)
-            }
-        }
-    }
-
-    suspend fun clearAppData(packageName: String) {
-        if (!viewModel.uiState.value.adbIsValid) return
         try {
-            val output = adb.adb.execute(ShellCommandRequest("pm clear $packageName"), adb.deviceSerial)
-            if (output.output.contains("Success")) {
-                viewModel.log("ADB", "Cleared app data for $packageName", LogLevel.INFO)
-            }
+            // sampleパッケージ内のテストを登録
+            val testClass = Class.forName("org.example.project.sample.ComposeAppDesktopTest")
+            _testPlugins.add(TestPlugin("sample_01", "Sample Desktop Test", testClass, "SampleTest", "Ready"))
         } catch (e: Exception) {
-            viewModel.log("ADB", "Clear data failed: ${e.message}", LogLevel.ERROR)
+            println("Sample Test class not found: ${e.message}")
         }
     }
 
-    suspend fun rebootToBootloader() {
-        if (!viewModel.uiState.value.adbIsValid) return
-        withContext(Dispatchers.IO) {
-            try {
-                adb.adb.execute(RebootRequest(RebootMode.BOOTLOADER), adb.deviceSerial)
-                viewModel.log("ADB", "Rebooting to bootloader...", LogLevel.PASS)
-            } catch (e: Exception) {
-                viewModel.log("ADB", "Reboot failed: ${e.message}", LogLevel.ERROR)
+    fun toggleIsRunning(isRunning: Boolean) {
+        _uiState.update { it.copy(isRunning = isRunning) }
+    }
+
+    fun logging(message: String) {
+        log("JUnit", message, LogLevel.DEBUG)
+    }
+
+    private fun output_path(): String {
+        val dir = File("build/test-results").apply { mkdirs() }
+        return dir.absolutePath
+    }
+
+    fun runTest(plugin: TestPlugin) {
+        if (uiState.value.isRunning) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            toggleIsRunning(true)
+
+            log("TEST", ">>> START: ${plugin.name}", LogLevel.INFO)
+
+            val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
+            val props = Properties().apply {
+                setProperty("SFR.shortname", plugin.shortName)
             }
-        }
-    }
 
-    suspend fun sendKeyEvent(keyCode: Int) {
-        if (!viewModel.uiState.value.adbIsValid) return
-        withContext(Dispatchers.IO) {
+            var fos: FileOutputStream? = null
             try {
-                adb.adb.execute(ShellCommandRequest("input keyevent $keyCode"), adb.deviceSerial)
-            } catch (e: Exception) {
-                viewModel.log("ADB", "Key event failed: ${e.message}", LogLevel.ERROR)
-            }
-        }
-    }
-
-    suspend fun startLogcat() {
-        val serial = adb.deviceSerial
-        if (!viewModel.uiState.value.adbIsValid || serial.isBlank()) return
-        if (logcatJob?.isActive == true) return
-        logcatJob = viewModel.viewModelScope.launch(Dispatchers.IO) {
-            val buffer = StringBuilder()
-            try {
-                val logChannel: ReceiveChannel<String> = adb.adb.execute(
-                    request = ChanneledLogcatRequest(modes = listOf(LogcatReadMode.threadtime)),
-                    serial = serial,
-                    scope = this
-                )
-                logChannel.consumeEach { chunk ->
-                    buffer.append(chunk)
-                    while (buffer.contains("\n")) {
-                        val index = buffer.indexOf("\n")
-                        val line = buffer.substring(0, index).trimEnd('\r', '\n')
-                        if (line.isNotBlank()) viewModel.onLogcatReceived(line)
-                        buffer.delete(0, index + 1)
+                // 正確なパッケージの AntXmlRunListener を使用
+                val antRunner = AntXmlRunListener(::logging, props) {
+                    viewModelScope.launch {
+                        toggleIsRunning(false)
+                        log("TEST", "<<< FINISH: ${plugin.name}", LogLevel.PASS)
                     }
                 }
+
+                val reportFile = File(output_path(), "junit-report-${plugin.shortName}-$timestamp.xml")
+                fos = FileOutputStream(reportFile)
+                antRunner.setOutputStream(fos)
+
+                // JUnitTestRunner を使用して実行
+                val runner = JUnitTestRunner(arrayOf(plugin.clazz), antRunner)
+
+                // 実行 (同期実行を想定)
+                runner.start()
+
+                // XMLファイルを確実にディスクに書き出す
+                fos.flush()
+
             } catch (e: Exception) {
-                if (e !is kotlinx.coroutines.CancellationException) {
-                    viewModel.log("Logcat", "Stream error: ${e.message}", LogLevel.ERROR)
-                }
+                log("TEST", "ERROR during execution: ${e.message}", LogLevel.ERROR)
+                toggleIsRunning(false)
             } finally {
-                buffer.clear()
+                try {
+                    fos?.close()
+                } catch (e: Exception) {
+                    // クローズ時の例外はログに出すのみ
+                }
             }
         }
     }
 
-    fun stopLogcat() {
-        logcatJob?.cancel()
-        logcatJob = null
-    }
+    // --- 既存のメソッド（省略せず維持） ---
 
-    suspend fun observeAdb() {
-        checkDependencies()
-        while (currentCoroutineContext().isActive) {
-            try {
-                withContext(Dispatchers.IO) { adb.startAlone() }
-                while (currentCoroutineContext().isActive) {
-                    delay(1000)
-                    if (viewModel.uiState.value.isRunning) continue
-                    if (adb.isDeviceInitialised()) {
-                        if (!viewModel.uiState.value.adbIsValid) {
-                            adbProps = AdbProps(adb.osversion, adb.productmodel, adb.deviceSerial, adb.displayId)
-                            viewModel.toggleAdbIsValid(true)
-                        }
-                        adb.adb.execute(ShellCommandRequest("echo"), adb.deviceSerial)
-                    }
-                }
-            } catch (e: Exception) {
-                if (viewModel.uiState.value.adbIsValid) {
-                    viewModel.toggleAdbIsValid(false)
-                    stopLogcat()
-                }
-                delay(2000)
-            }
+    fun pressHome() = viewModelScope.launch { adbObserver.sendKeyEvent(3) }
+    fun pressBack() = viewModelScope.launch { adbObserver.sendKeyEvent(4) }
+    fun pressEnter() = viewModelScope.launch { adbObserver.sendKeyEvent(66) }
+
+    private fun startAdbObservation() {
+        viewModelScope.launch {
+            try { adbObserver.observeAdb() } catch (e: Exception) { log("ADB", "Observer error: ${e.message}", LogLevel.ERROR) }
         }
     }
 
-    suspend fun clearLogcatBuffer() {
-        if (!viewModel.uiState.value.adbIsValid) return
-        withContext(Dispatchers.IO) { adb.adb.execute(ShellCommandRequest("logcat -c"), adb.deviceSerial) }
+    fun toggleAdbIsValid(isValid: Boolean) {
+        _uiState.update { it.copy(adbIsValid = isValid) }
+        log("ADB", "Status: ${if (isValid) "Connected" else "Disconnected"}", if (isValid) LogLevel.PASS else LogLevel.ERROR)
+    }
+
+    fun log(tag: String, message: String, level: LogLevel = LogLevel.INFO) {
+        val timestamp = LocalTime.now().toString().take(8)
+        viewModelScope.launch { _logFlow.emit(LogLine(timestamp, tag, message, level)) }
+    }
+
+    fun captureScreenshot() { viewModelScope.launch { adbObserver.captureScreenshot() } }
+    fun sendText(text: String) { viewModelScope.launch { adbObserver.sendText(text) } }
+    fun clearAppData() { viewModelScope.launch { adbObserver.clearAppData("org.example.project") } }
+    fun openLogcatWindow() { _isLogcatWindowOpen.value = true; startLogcat() }
+    fun closeLogcatWindow() { _isLogcatWindowOpen.value = false; stopLogcat() }
+    fun startLogcat() { viewModelScope.launch { adbObserver.startLogcat() } }
+    fun stopLogcat() { adbObserver.stopLogcat() }
+    fun clearLogcat() { _logcatLines.clear(); viewModelScope.launch { adbObserver.clearLogcatBuffer() } }
+    fun updateLogcatFilter(text: String) { _logcatFilter.value = text }
+    fun onLogcatReceived(rawLine: String) {
+        writeRawLogcatToFile(rawLine)
+        val parsedLog = parseLogLine(rawLine) ?: LogLine("", "RAW", rawLine, LogLevel.INFO)
+        _logcatLines.add(parsedLog)
+    }
+    private fun parseLogLine(line: String): LogLine? {
+        val parts = line.trim().split(Regex("\\s+"))
+        if (parts.size < 5) return null
+        val body = line.substringAfter(parts[4]).trim()
+        return LogLine("${parts[0]} ${parts[1]}", body.substringBefore(":").trim(), body.substringAfter(":").trim(), LogLevel.INFO)
+    }
+    private fun writeRawLogcatToFile(line: String) {
+        viewModelScope.launch(Dispatchers.IO) { try { RAW_LOGCAT_FILE.appendText(line + "\n") } catch (e: IOException) {} }
     }
 }
 
-File: composeApp/src/jvmMain/kotlin/org/example/project/adb/FastbootClient.kt
-package org.example.project.adb
+File: composeApp/src/jvmMain/kotlin/org/example/project/sample/ComposeAppDesktopTest.kt
+package org.example.project.sample
 
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import java.io.File
-import java.util.concurrent.TimeUnit
+import org.example.project.JUnitBridge
+import org.example.project.adb.rules.AdbDeviceRule
+import org.junit.Rule
+import org.junit.Test
 
-data class CommandResult(val exitCode: Int, val output: String)
+class ComposeAppDesktopTest {
 
-class FastbootClient {
+    @get:Rule
+    val adbDeviceRule = AdbDeviceRule()
 
-    /**
-     * fastbootバイナリの有効なパスを解決します。
-     * 1. プロジェクトローカル
-     * 2. 各OSの標準SDKパス
-     * 3. システムPATH
-     */
-    private val executable: String by lazy {
-        val osName = System.getProperty("os.name").lowercase()
-        val binName = if (osName.contains("win")) "fastboot.exe" else "fastboot"
-        val home = System.getProperty("user.home")
+    // JUnitBridge を通じて本体のログ機能を利用
+    private val logger = JUnitBridge.logging
 
-        // 1. プロジェクトローカル
-        val local = File("bin/platform-tools/$binName")
-        if (local.exists() && local.canExecute()) return@lazy local.absolutePath
+    @Test
+    fun outputTest() {
+        logger?.invoke("--- TEST START: outputTest ---")
 
-        // 2. 各OSの標準パス
-        val sdkPaths = mutableListOf<String>()
-        if (osName.contains("mac")) {
-            sdkPaths.add("$home/Library/Android/sdk/platform-tools/$binName")
-        } else if (osName.contains("win")) {
-            val localAppData = System.getenv("LOCALAPPDATA")
-            if (localAppData != null) sdkPaths.add("$localAppData\\Android\\Sdk\\platform-tools\\$binName")
-        } else if (osName.contains("linux")) {
-            sdkPaths.add("$home/Android/Sdk/platform-tools/$binName")
-            sdkPaths.add("/usr/lib/android-sdk/platform-tools/$binName")
-        }
+        // 標準出力
+        println("JUnit stdout: Connectivity check.")
 
-        for (path in sdkPaths) {
-            val file = File(path)
-            if (file.exists() && file.canExecute()) return@lazy file.absolutePath
-        }
+        // AdbDeviceRule の動作確認ログ
+        val serial = adbDeviceRule.deviceSerial
+        logger?.invoke("Target Device Serial: $serial")
 
-        // 3. デフォルト (PATHに期待)
-        binName
-    }
+        Thread.sleep(500)
 
-    private suspend fun executeCommand(vararg args: String): CommandResult = withContext(Dispatchers.IO) {
-        try {
-            val process = ProcessBuilder(executable, *args)
-                .redirectErrorStream(true)
-                .start()
-
-            process.waitFor(30, TimeUnit.SECONDS)
-            val output = process.inputStream.bufferedReader().readText()
-
-            CommandResult(process.exitValue(), output.trim())
-        } catch (e: Exception) {
-            CommandResult(-1, e.message ?: "Unknown error")
-        }
-    }
-
-    suspend fun getDevices(): List<String> {
-        val result = executeCommand("devices")
-        if (result.exitCode == 0) {
-            return result.output.lines().filter { it.isNotBlank() }.map { it.split("\\s+".toRegex()).first() }
-        }
-        return emptyList()
-    }
-
-    suspend fun flashPartition(serial: String, partition: String, imageFile: File): CommandResult {
-        if (!imageFile.exists()) {
-            return CommandResult(-1, "Image file not found: ${imageFile.absolutePath}")
-        }
-        return executeCommand("-s", serial, "flash", partition, imageFile.absolutePath)
-    }
-
-    suspend fun reboot(serial: String): CommandResult {
-        return executeCommand("-s", serial, "reboot")
+        logger?.invoke("--- TEST FINISHED: Success ---")
     }
 }
