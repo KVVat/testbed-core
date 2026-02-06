@@ -16,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import java.io.File
 import androidx.compose.runtime.mutableStateListOf
+import kotlinx.coroutines.withContext
 import java.io.IOException
 
 class AppViewModel : ViewModel() {
@@ -192,6 +193,9 @@ class AppViewModel : ViewModel() {
     fun clearLogcat() {
         _logcatLines.clear()
         log("Logcat", "Logcat display cleared.", LogLevel.INFO)
+        viewModelScope.launch {
+            adbObserver.clearLogcatBuffer()
+        }
     }
 
     fun updateLogcatFilter(text: String) {

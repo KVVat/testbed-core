@@ -293,4 +293,24 @@ class AdbObserver(private val viewModel: AppViewModel) {
             }
         }
     }
+
+    /**
+     * 端末側のLogcatバッファを空にします (adb logcat -c)
+     */
+    suspend fun clearLogcatBuffer() {
+        if (!viewModel.uiState.value.adbIsValid) return
+
+        withContext(Dispatchers.IO) {
+            try {
+                viewModel.log("ADB", "Clearing device logcat buffer...", LogLevel.INFO)
+
+                // "logcat -c" でバッファをクリア
+                adb.adb.execute(ShellCommandRequest("logcat -c"), adb.deviceSerial)
+
+                viewModel.log("ADB", "Logcat buffer cleared.", LogLevel.PASS)
+            } catch (e: Exception) {
+                viewModel.log("ADB", "Failed to clear logcat: ${e.message}", LogLevel.ERROR)
+            }
+        }
+    }
 }
