@@ -72,14 +72,32 @@ class AdbObserver(private val viewModel: AppViewModel) {
 
     /**
      * デバイスにテキストを送信します。
+     * 空文字のチェックと、非アスキー文字（マルチバイト文字）の制限を行っています。
      */
     suspend fun sendText(text: String) {
         if (!viewModel.uiState.value.adbIsValid) return
+
+        // 1. 空文字または空白のみの場合は、adbコマンドの発行自体をスキップしてIllegalArgumentExceptionを回避
+        if (text.isBlank()) {
+            viewModel.log("ADB", "Input ignored: Text is empty.", LogLevel.WARN)
+            return
+        }
+
+        // 2. 非アスキー文字（Unicode > 127）が含まれているかチェック
+        // 日本語だけでなく、多言語のマルチバイト文字すべてを対象にします
+        val hasNonAscii = text.any { it.code > 127 }
+        if (hasNonAscii) {
+            viewModel.log("ADB", "Input failed: Non-ASCII characters are not supported via 'input text'.", LogLevel.ERROR)
+            return
+        }
+
         withContext(Dispatchers.IO) {
             try {
+                // スペースを %s にエスケープ
                 val escapedText = text.replace(" ", "%s")
                 val command = "input text $escapedText"
                 val result = adb.adb.execute(ShellCommandRequest(command), adb.deviceSerial)
+
                 if (result.exitCode == 0) {
                     viewModel.log("ADB", "Text sent successfully: $text", LogLevel.PASS)
                 } else {
@@ -137,12 +155,11 @@ class AdbObserver(private val viewModel: AppViewModel) {
 
     /**
      * Logcatのストリーミングを開始します。
-     * StringBuilderを使用してチャンクを結合し、改行ごとに分割してViewModelへ渡します。
      */
     suspend fun startLogcat() {
         val serial = adb.deviceSerial
         if (!viewModel.uiState.value.adbIsValid || serial.isBlank()) return
-        
+
         if (logcatJob?.isActive == true) return
 
         logcatJob = viewModel.viewModelScope.launch(Dispatchers.IO) {
@@ -225,4 +242,3 @@ class AdbObserver(private val viewModel: AppViewModel) {
         }
     }
 }
-

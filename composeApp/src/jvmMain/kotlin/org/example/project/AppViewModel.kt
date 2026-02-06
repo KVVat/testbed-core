@@ -49,6 +49,7 @@ class AppViewModel : ViewModel() {
 
     private fun startAdbObservation() {
         viewModelScope.launch {
+            log("SYSTEM", "Starting ADB Observer...", LogLevel.INFO)
             try {
                 adbObserver.observeAdb()
             } catch (e: Exception) {
@@ -78,11 +79,17 @@ class AppViewModel : ViewModel() {
     }
 
     fun sendText(text: String) {
-        viewModelScope.launch { adbObserver.sendText(text) }
+        log("UI", "Requesting to send text...")
+        viewModelScope.launch {
+            adbObserver.sendText(text)
+        }
     }
 
     fun clearAppData() {
-        viewModelScope.launch { adbObserver.clearAppData("org.example.project") }
+        log("UI", "Requesting to clear app data...")
+        viewModelScope.launch {
+            adbObserver.clearAppData("org.example.project")
+        }
     }
 
     /**
@@ -215,7 +222,9 @@ class AppViewModel : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 RAW_LOGCAT_FILE.appendText(line + "\n")
-            } catch (e: IOException) {}
+            } catch (e: IOException) {
+                log("FileLogger", "Failed to write raw logcat to file: ${e.message}", LogLevel.ERROR)
+            }
         }
     }
 }

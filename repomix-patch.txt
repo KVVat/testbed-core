@@ -1,8 +1,35 @@
+File: scripts/setup_tools.sh
+#!/bin/bash
+# SDK Platform-Toolsを自動インストールするスクリプト (macOS/Linux用)
+
+PLATFORM_TOOLS_DIR="./bin/platform-tools"
+OS_TYPE="$(uname -s)"
+
+if [ ! -d "$PLATFORM_TOOLS_DIR" ]; then
+    echo "Installing SDK Platform-Tools..."
+    mkdir -p bin
+
+    if [ "$OS_TYPE" == "Darwin" ]; then
+        URL="https://dl.google.com/android/repository/platform-tools-latest-darwin.zip"
+    else
+        URL="https://dl.google.com/android/repository/platform-tools-latest-linux.zip"
+    fi
+
+    curl -L "$URL" -o bin/tools.zip
+    unzip bin/tools.zip -d bin/
+    rm bin/tools.zip
+    echo "✅ Platform-Tools installed in $PLATFORM_TOOLS_DIR"
+else
+    echo "✅ Platform-Tools already exists."
+fi
+
 File: composeApp/src/jvmMain/kotlin/org/example/project/adb/AdbObserver.kt
 package org.example.project.adb
 
 import androidx.lifecycle.viewModelScope
 import com.malinskiy.adam.exception.RequestRejectedException
+import com.malinskiy.adam.request.logcat.ChanneledLogcatRequest
+import com.malinskiy.adam.request.logcat.LogcatReadMode
 import com.malinskiy.adam.request.misc.RebootMode
 import com.malinskiy.adam.request.misc.RebootRequest
 import com.malinskiy.adam.request.shell.v1.ShellCommandRequest
@@ -30,8 +57,26 @@ class AdbObserver(private val viewModel: AppViewModel) {
     private var logcatJob: Job? = null
 
     /**
-     * スクリーンショットを撮影し、ローカルに保存します。
+     * 依存関係（adbバイナリ）が実行可能かチェックします。
      */
+    fun checkDependencies(): Boolean {
+        val localAdb = File("bin/platform-tools/adb")
+        val isLocalOk = localAdb.exists() && localAdb.canExecute()
+
+        // システムパスのadbも確認
+        val isSystemOk = try {
+            Runtime.getRuntime().exec("adb --version").waitFor() == 0
+        } catch (e: Exception) {
+            false
+        }
+
+        if (!isLocalOk && !isSystemOk) {
+            viewModel.log("SETUP", "Critical Error: 'adb' not found. Please run setup script.", LogLevel.ERROR)
+            return false
+        }
+        return true
+    }
+
     suspend fun captureScreenshot() {
         if (!viewModel.uiState.value.adbIsValid) {
             viewModel.log("ADB", "Cannot take screenshot: No device connected.", LogLevel.ERROR)
@@ -49,18 +94,15 @@ class AdbObserver(private val viewModel: AppViewModel) {
                 if (!localDir.exists()) localDir.mkdirs()
                 val localFile = File(localDir, "screenshot_$timestamp.png")
 
-                // デバイス側でキャプチャ
                 adb.adb.execute(ShellCommandRequest("screencap -p $remotePath"), serial)
 
-                // PCへ転送
                 val channel = adb.adb.execute(
                     PullFileRequest(remotePath, localFile),
                     this,
                     serial
                 )
-                for (progress in channel) { /* 進行状況は必要に応じて処理 */ }
+                for (progress in channel) { }
 
-                // ゴミ掃除
                 adb.adb.execute(ShellCommandRequest("rm $remotePath"), serial)
                 viewModel.log("ADB", "Screenshot saved: ${localFile.absolutePath}", LogLevel.PASS)
             } catch (e: Exception) {
@@ -69,11 +111,18 @@ class AdbObserver(private val viewModel: AppViewModel) {
         }
     }
 
-    /**
-     * デバイスにテキストを送信します。
-     */
     suspend fun sendText(text: String) {
         if (!viewModel.uiState.value.adbIsValid) return
+        if (text.isBlank()) {
+            viewModel.log("ADB", "Input ignored: Text is empty.", LogLevel.WARN)
+            return
+        }
+        val hasNonAscii = text.any { it.code > 127 }
+        if (hasNonAscii) {
+            viewModel.log("ADB", "Input failed: Non-ASCII characters are not supported.", LogLevel.ERROR)
+            return
+        }
+
         withContext(Dispatchers.IO) {
             try {
                 val escapedText = text.replace(" ", "%s")
@@ -90,9 +139,6 @@ class AdbObserver(private val viewModel: AppViewModel) {
         }
     }
 
-    /**
-     * アプリデータを消去します。
-     */
     suspend fun clearAppData(packageName: String) {
         if (!viewModel.uiState.value.adbIsValid) return
         try {
@@ -105,9 +151,6 @@ class AdbObserver(private val viewModel: AppViewModel) {
         }
     }
 
-    /**
-     * ブートローダーモードで再起動します。
-     */
     suspend fun rebootToBootloader() {
         if (!viewModel.uiState.value.adbIsValid) return
         withContext(Dispatchers.IO) {
@@ -120,9 +163,6 @@ class AdbObserver(private val viewModel: AppViewModel) {
         }
     }
 
-    /**
-     * キーイベントを送信します。
-     */
     suspend fun sendKeyEvent(keyCode: Int) {
         if (!viewModel.uiState.value.adbIsValid) return
         withContext(Dispatchers.IO) {
@@ -134,21 +174,16 @@ class AdbObserver(private val viewModel: AppViewModel) {
         }
     }
 
-    /**
-     * Logcatのストリーミングを開始します。
-     * StringBuilderを使用してチャンクを結合し、改行ごとに分割してViewModelへ渡します。
-     */
     suspend fun startLogcat() {
         val serial = adb.deviceSerial
         if (!viewModel.uiState.value.adbIsValid || serial.isBlank()) return
-        
         if (logcatJob?.isActive == true) return
 
         logcatJob = viewModel.viewModelScope.launch(Dispatchers.IO) {
             val buffer = StringBuilder()
             try {
                 val logChannel: ReceiveChannel<String> = adb.adb.execute(
-                    request = ShellCommandRequest("logcat -v time"),
+                    request = ChanneledLogcatRequest(modes = listOf(LogcatReadMode.threadtime)),
                     serial = serial,
                     scope = this
                 )
@@ -174,18 +209,15 @@ class AdbObserver(private val viewModel: AppViewModel) {
         }
     }
 
-    /**
-     * Logcatのストリーミングを停止します。
-     */
     fun stopLogcat() {
         logcatJob?.cancel()
         logcatJob = null
     }
 
-    /**
-     * ADBデバイスの接続状態を監視し、自動再接続を行います。
-     */
     suspend fun observeAdb() {
+        // 起動時に依存関係をチェック
+        checkDependencies()
+
         while (currentCoroutineContext().isActive) {
             try {
                 withContext(Dispatchers.IO) {
@@ -214,9 +246,6 @@ class AdbObserver(private val viewModel: AppViewModel) {
         }
     }
 
-    /**
-     * デバイス側のLogcatバッファをクリアします。
-     */
     suspend fun clearLogcatBuffer() {
         if (!viewModel.uiState.value.adbIsValid) return
         withContext(Dispatchers.IO) {
@@ -225,165 +254,55 @@ class AdbObserver(private val viewModel: AppViewModel) {
     }
 }
 
-File: composeApp/src/jvmMain/kotlin/org/example/project/AppViewModel.kt
-package org.example.project
+File: composeApp/src/jvmMain/kotlin/org/example/project/adb/FastbootClient.kt
+package org.example.project.adb
 
-import java.time.LocalTime
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
-import org.example.project.adb.AdbObserver
-import org.example.project.adb.FastbootClient
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import java.io.File
-import androidx.compose.runtime.mutableStateListOf
 import kotlinx.coroutines.withContext
-import java.io.IOException
+import java.io.File
+import java.util.concurrent.TimeUnit
 
-class AppViewModel : ViewModel() {
-    private val _uiState = MutableStateFlow(AppUiState())
-    val uiState = _uiState.asStateFlow()
+data class CommandResult(val exitCode: Int, val output: String)
 
-    private val _logFlow = MutableSharedFlow<LogLine>(replay = 100)
-    val logFlow = _logFlow.asSharedFlow()
+class FastbootClient {
 
-    private val _isLogcatWindowOpen = MutableStateFlow(false)
-    val isLogcatWindowOpen = _isLogcatWindowOpen.asStateFlow()
-
-    private val _logcatLines = mutableStateListOf<LogLine>()
-    val logcatLines: List<LogLine> get() = _logcatLines
-
-    private val _logcatFilter = MutableStateFlow("")
-    val logcatFilter = _logcatFilter.asStateFlow()
-
-    private val adbObserver = AdbObserver(this)
-    private val fastbootClient = FastbootClient()
-
-    private val RAW_LOGCAT_FILE = File("raw_logcat_output.log")
-
-    init {
-        startAdbObservation()
+    // プロジェクトローカルなバイナリを優先、なければシステムパス
+    private val executable: String by lazy {
+        val local = File("bin/platform-tools/fastboot")
+        if (local.exists() && local.canExecute()) local.absolutePath else "fastboot"
     }
 
-    fun pressHome() = viewModelScope.launch { adbObserver.sendKeyEvent(3) }
-    fun pressBack() = viewModelScope.launch { adbObserver.sendKeyEvent(4) }
-    fun pressEnter() = viewModelScope.launch { adbObserver.sendKeyEvent(66) }
+    private suspend fun executeCommand(vararg args: String): CommandResult = withContext(Dispatchers.IO) {
+        try {
+            val process = ProcessBuilder(executable, *args)
+                .redirectErrorStream(true)
+                .start()
 
-    private fun startAdbObservation() {
-        viewModelScope.launch {
-            try {
-                adbObserver.observeAdb()
-            } catch (e: Exception) {
-                log("ADB", "Observer error: ${e.message}", LogLevel.ERROR)
-            }
+            process.waitFor(30, TimeUnit.SECONDS)
+            val output = process.inputStream.bufferedReader().readText()
+
+            CommandResult(process.exitValue(), output.trim())
+        } catch (e: Exception) {
+            CommandResult(-1, e.message ?: "Unknown error")
         }
     }
 
-    fun toggleAdbIsValid(isValid: Boolean) {
-        _uiState.update { it.copy(adbIsValid = isValid) }
-        log("ADB", "Status: ${if (isValid) "Connected" else "Disconnected"}", if (isValid) LogLevel.PASS else LogLevel.ERROR)
-    }
-
-    fun setRunning(isRunning: Boolean) {
-        _uiState.update { it.copy(isRunning = isRunning) }
-    }
-
-    fun log(tag: String, message: String, level: LogLevel = LogLevel.INFO) {
-        val timestamp = LocalTime.now().toString().take(8)
-        viewModelScope.launch {
-            _logFlow.emit(LogLine(timestamp, tag, message, level))
+    suspend fun getDevices(): List<String> {
+        val result = executeCommand("devices")
+        if (result.exitCode == 0) {
+            return result.output.lines().filter { it.isNotBlank() }.map { it.split("\\s+".toRegex()).first() }
         }
+        return emptyList()
     }
 
-    fun captureScreenshot() {
-        viewModelScope.launch { adbObserver.captureScreenshot() }
-    }
-
-    fun sendText(text: String) {
-        viewModelScope.launch { adbObserver.sendText(text) }
-    }
-
-    fun clearAppData() {
-        viewModelScope.launch { adbObserver.clearAppData("org.example.project") }
-    }
-
-    fun openLogcatWindow() {
-        _isLogcatWindowOpen.value = true
-        startLogcat()
-    }
-
-    fun closeLogcatWindow() {
-        _isLogcatWindowOpen.value = false
-        stopLogcat()
-    }
-
-    fun startLogcat() {
-        viewModelScope.launch {
-            adbObserver.startLogcat()
+    suspend fun flashPartition(serial: String, partition: String, imageFile: File): CommandResult {
+        if (!imageFile.exists()) {
+            return CommandResult(-1, "Image file not found: ${imageFile.absolutePath}")
         }
+        return executeCommand("-s", serial, "flash", partition, imageFile.absolutePath)
     }
 
-    fun stopLogcat() {
-        adbObserver.stopLogcat()
-    }
-
-    fun clearLogcat() {
-        _logcatLines.clear()
-        viewModelScope.launch { adbObserver.clearLogcatBuffer() }
-    }
-
-    fun updateLogcatFilter(text: String) {
-        _logcatFilter.value = text
-    }
-
-    /**
-     * AdbObserverから1行ずつログを受け取り、パースしてUI用リストに追加します。
-     */
-    fun onLogcatReceived(rawLine: String) {
-        writeRawLogcatToFile(rawLine)
-        val parsedLog = parseLogLine(rawLine) ?: LogLine("", "RAW", rawLine, LogLevel.INFO)
-        
-        _logcatLines.add(parsedLog)
-        if (_logcatLines.size > 2000) _logcatLines.removeAt(0)
-    }
-
-    /**
-     * ログ行を簡易的にパースします。
-     */
-    private fun parseLogLine(line: String): LogLine? {
-        val parts = line.trim().split(Regex("\\s+"))
-        if (parts.size < 5) return null
-        
-        val timestamp = "${parts[0]} ${parts[1]}"
-        val levelStr = parts[4]
-        val level = when (levelStr) {
-            "E", "F" -> LogLevel.ERROR
-            "W" -> LogLevel.WARN
-            "D", "V" -> LogLevel.DEBUG
-            else -> LogLevel.INFO
-        }
-        
-        val body = line.substringAfter(levelStr).trim()
-        val tag = body.substringBefore(":").trim()
-        val message = body.substringAfter(":").trim()
-
-        return LogLine(timestamp, tag, message, level)
-    }
-
-    /**
-     * 生のログをデバッグ用にファイル保存します。
-     */
-    private fun writeRawLogcatToFile(line: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                RAW_LOGCAT_FILE.appendText(line + "\n")
-            } catch (e: IOException) {}
-        }
+    suspend fun reboot(serial: String): CommandResult {
+        return executeCommand("-s", serial, "reboot")
     }
 }
