@@ -2,8 +2,6 @@ package org.example.project
 
 import androidx.compose.desktop.ui.tooling.preview.Preview
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -25,38 +23,31 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
-import org.example.project.AppViewModel
-import org.example.project.LogLevel
-import org.example.project.LogLine
 import java.io.File
-
-data class TestPlugin(val id: String, val name: String, val status: String)
 
 @Composable
 @Preview
 fun App() {
-    // ViewModelの取得 (ここでinitブロックが走り、ADB監視が始まります)
     val viewModel: AppViewModel = viewModel { AppViewModel() }
-
-    // ログフローの監視
     val logLines = remember { mutableStateListOf<LogLine>() }
+
     LaunchedEffect(viewModel) {
         viewModel.logFlow.collect { log ->
             logLines.add(log)
-            // ログが多すぎたら古いものを消すなどの処理もここで可能
         }
     }
 
-    // UIステートの監視 (ボタンの色変えなどに使用)
     val uiState by viewModel.uiState.collectAsState()
     val isLogcatWindowOpen by viewModel.isLogcatWindowOpen.collectAsState()
 
     MaterialTheme(colors = darkColors()) {
         Scaffold(
-            // TopControlBar にアクションを渡す
             topBar = {
                 TopControlBar(
                     adbConnected = uiState.adbIsValid,
+                    isRunning = uiState.isRunning,
+                    testPlugins = viewModel.testPlugins,
+                    onRunTest = { viewModel.runTest(it) },
                     onBackClick = { viewModel.pressBack() },
                     onHomeClick = { viewModel.pressHome() },
                     onSendText = { text -> viewModel.sendText(text) },
@@ -65,22 +56,13 @@ fun App() {
             },
             content = { padding ->
                 Row(modifier = Modifier.padding(padding).fillMaxSize()) {
-                    LogConsole(
-                        logs = logLines,
-                        modifier = Modifier.weight(1f)
-                    )
-
-                    // UtilitySideBar は引数が減りました
+                    LogConsole(logs = logLines, modifier = Modifier.weight(1f))
                     UtilitySideBar(
-                        onLogcatClick = { enable ->
-                            if (enable) {
-                                viewModel.openLogcatWindow()
-                            } else {
-                                viewModel.closeLogcatWindow()
-                            }
+                        onLogcatClick = { enable: Boolean ->
+                            if (enable) viewModel.openLogcatWindow() else viewModel.closeLogcatWindow()
                         },
-                        onFileExplorerClick = { /*viewModel.openFileExplorer()*/ },
-                        onFlashClick = { file -> viewModel.batchFlashBootImage(file) },
+                        onFileExplorerClick = { },
+                        onFlashClick = { file: File -> /* viewModel.batchFlashBootImage(file) */ },
                         onClearDataClick = { viewModel.clearAppData() }
                     )
                 }
@@ -88,21 +70,17 @@ fun App() {
         )
     }
 
-    // Logcat Monitor Window
     if (isLogcatWindowOpen) {
-        LogcatWindow(
-            viewModel = viewModel,
-            onCloseRequest = { viewModel.closeLogcatWindow() }
-        )
+        LogcatWindow(viewModel = viewModel, onCloseRequest = { viewModel.closeLogcatWindow() })
     }
 }
-
-// --- 以下、既存のコンポーザブルをデータ受け取り可能に微修正 ---
-
 
 @Composable
 fun TopControlBar(
     adbConnected: Boolean,
+    isRunning: Boolean,
+    testPlugins: List<TestPlugin>,
+    onRunTest: (TestPlugin) -> Unit,
     onBackClick: () -> Unit,
     onHomeClick: () -> Unit,
     onSendText: (String) -> Unit,
@@ -114,48 +92,67 @@ fun TopControlBar(
         elevation = 0.dp,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.PhoneAndroid,
-                    contentDescription = null,
-                    tint = if (adbConnected) Color(0xFF6B9F78) else Color.Gray,
-                    modifier = Modifier.size(20.dp)
-                )
+                var testMenuExpanded by remember { mutableStateOf(false) }
+                Box {
+                    TextButton(
+                        onClick = { testMenuExpanded = true },
+                        enabled = !isRunning,
+                        colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
+                    ) {
+                        Icon(Icons.Default.PlayArrow, null, tint = if (isRunning) Color.Gray else Color(0xFF6A8759))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Tests", fontSize = 14.sp)
+                        Icon(Icons.Default.ArrowDropDown, null)
+                    }
+                    DropdownMenu(
+                        expanded = testMenuExpanded,
+                        onDismissRequest = { testMenuExpanded = false },
+                        modifier = Modifier.background(Color(0xFF2B2D30))
+                    ) {
+                        if (testPlugins.isEmpty()) {
+                            DropdownMenuItem(onClick = {}) {
+                                Text("No Plugins Loaded", color = Color.Gray, fontSize = 12.sp)
+                            }
+                        }
+                        testPlugins.forEach { plugin ->
+                            DropdownMenuItem(onClick = {
+                                testMenuExpanded = false
+                                onRunTest(plugin)
+                            }) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Science, null, modifier = Modifier.size(16.dp), tint = Color.LightGray)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(plugin.name, color = Color.White, fontSize = 13.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.width(12.dp))
+                Divider(Modifier.height(24.dp).width(1.dp), color = Color.Gray)
+                Spacer(Modifier.width(12.dp))
+                Icon(Icons.Default.PhoneAndroid, null, tint = if (adbConnected) Color(0xFF6B9F78) else Color.Gray, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
-                Text(
-                    text = if (adbConnected) "Pixel 8 (Active)" else "Disconnected",
-                    fontSize = 14.sp,
-                    color = Color.LightGray
-                )
+                Text(text = if (adbConnected) "Pixel 8 (Active)" else "Disconnected", fontSize = 13.sp, color = Color.LightGray)
+                if (isRunning) {
+                    Spacer(Modifier.width(16.dp))
+                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = Color(0xFF569CD6))
+                }
             }
         },
         actions = {
-            // --- 右側に配置するアクションボタン群 ---
-
-            // 1. ナビゲーション (Back / Home)
             IconButton(onClick = onBackClick) { Icon(Icons.Default.ArrowBack, "Back") }
             IconButton(onClick = onHomeClick) { Icon(Icons.Default.Home, "Home") }
-
             Divider(Modifier.height(24.dp).width(1.dp).padding(horizontal = 8.dp), color = Color.Gray)
-
-            // 2. 入力系 (エディタ起動 / テキスト送信)
-            //IconButton(onClick = onOpenEditorClick) { Icon(Icons.Default.Edit, "Open Editor") }
-
             var showInputTextDialog by remember { mutableStateOf(false) }
             IconButton(onClick = { showInputTextDialog = true }) { Icon(Icons.Default.Keyboard, "Input Text") }
-
             Divider(Modifier.height(24.dp).width(1.dp).padding(horizontal = 8.dp), color = Color.Gray)
-
-            // 3. ツール (スクショ)
             IconButton(onClick = onScreenshotClick) { Icon(Icons.Default.CameraAlt, "Screenshot") }
 
-            // テキスト入力ダイアログの制御
             if (showInputTextDialog) {
                 InputTextDialog(
                     onDismiss = { showInputTextDialog = false },
-                    onSend = {
-                        onSendText(it)
-                        showInputTextDialog = false
-                    }
+                    onSend = { text -> onSendText(text); showInputTextDialog = false }
                 )
             }
         }
@@ -165,34 +162,21 @@ fun TopControlBar(
 @Composable
 fun LogConsole(logs: List<LogLine>, modifier: Modifier = Modifier) {
     val listState = rememberLazyListState()
-
-    LaunchedEffect(logs.size) {
-        if (logs.isNotEmpty()) {
-            listState.animateScrollToItem(logs.size - 1)
-        }
-    }
-
+    LaunchedEffect(logs.size) { if (logs.isNotEmpty()) listState.animateScrollToItem(logs.size - 1) }
     Column(modifier = modifier.background(Color(0xFF1E1F22)).padding(8.dp)) {
-        LazyColumn(state = listState) {
-            items(logs) { log ->
-                LogLineItem(log) // 描画ロジックを分離して見やすく
-            }
-        }
+        LazyColumn(state = listState) { items(logs) { LogLineItem(it) } }
     }
 }
 
 @Composable
 fun LogLineItem(log: LogLine) {
-    // ログレベルごとの色定義
     val levelColor = when(log.level) {
-        LogLevel.INFO -> Color(0xFFBBBBBB)  // グレー
-        LogLevel.DEBUG -> Color(0xFF569CD6) // 青 (VSCode風)
-        LogLevel.WARN -> Color(0xFFFFC66D)  // 黄 (IntelliJ風)
-        LogLevel.ERROR -> Color(0xFFFF6B68) // 赤
-        LogLevel.PASS -> Color(0xFF6A8759)  // 緑
+        LogLevel.INFO -> Color(0xFFBBBBBB)
+        LogLevel.DEBUG -> Color(0xFF569CD6)
+        LogLevel.WARN -> Color(0xFFFFC66D)
+        LogLevel.ERROR -> Color(0xFFFF6B68)
+        LogLevel.PASS -> Color(0xFF6A8759)
     }
-
-    // 表示する文字 (I, D, W, E, P)
     val levelChar = when(log.level) {
         LogLevel.INFO -> "I"
         LogLevel.DEBUG -> "D"
@@ -200,99 +184,35 @@ fun LogLineItem(log: LogLine) {
         LogLevel.ERROR -> "E"
         LogLevel.PASS -> "P"
     }
-
-    Row(
-        modifier = Modifier.padding(vertical = 1.dp),
-        verticalAlignment = Alignment.Top // 複数行メッセージでもバッジは上に固定
-    ) {
-        // [反転文字バッジ]
-        Surface(
-            color = levelColor, // 背景色をレベル色に
-            shape = RoundedCornerShape(4.dp), // 少し角を丸める
-            modifier = Modifier
-                .size(20.dp) // 正方形のサイズ
-                .padding(top = 1.dp) // テキストの高さと微妙に合わせる
-        ) {
+    Row(modifier = Modifier.padding(vertical = 1.dp), verticalAlignment = Alignment.Top) {
+        Surface(color = levelColor, shape = RoundedCornerShape(4.dp), modifier = Modifier.size(20.dp).padding(top = 1.dp)) {
             Box(contentAlignment = Alignment.Center) {
-                Text(
-                    text = levelChar,
-                    color = Color(0xFF1E1F22), // 文字色は背景のダークグレーと同じにして「抜き文字」風に
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp,
-                    fontFamily = FontFamily.Monospace
-                )
+                Text(text = levelChar, color = Color(0xFF1E1F22), fontWeight = FontWeight.Bold, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
             }
         }
-
         Spacer(modifier = Modifier.width(8.dp))
-
-        // [ログ本文]
-        Text(
-            text = "${log.timestamp} [${log.tag}] ${log.message}",
-            color = levelColor, // 本文も色を合わせる（白がいい場合は Color.White に変更可）
-            fontFamily = FontFamily.Monospace,
-            fontSize = 13.sp,
-            lineHeight = 18.sp // 行間を少し広げて読みやすく
-        )
+        Text(text = "${log.timestamp} [${log.tag}] ${log.message}", color = levelColor, fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 18.sp)
     }
 }
-// --- 3. ADBユーティリティバー (右端) ---
-@Composable
-fun UtilitySideBar(
-    onLogcatClick: (Boolean) -> Unit,
-    onFileExplorerClick: () -> Unit,
-    onFlashClick: (File) -> Unit,
-    onClearDataClick: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxHeight()
-            .width(56.dp)
-            .background(Color(0xFF2B2D30))
-            .drawWithContent {
-                drawContent()
-                drawLine(
-                    color = Color(0xFF1E1F22),
-                    start = Offset(0f, 0f),
-                    end = Offset(0f, size.height),
-                    strokeWidth = 1.dp.toPx()
-                )
-            },
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Top
-    ) {
-        Spacer(Modifier.height(16.dp))
 
-        // Logcat
+@Composable
+fun UtilitySideBar(onLogcatClick: (Boolean) -> Unit, onFileExplorerClick: () -> Unit, onFlashClick: (File) -> Unit, onClearDataClick: () -> Unit) {
+    Column(modifier = Modifier.fillMaxHeight().width(56.dp).background(Color(0xFF2B2D30)).drawWithContent {
+        drawContent()
+        drawLine(color = Color(0xFF1E1F22), start = Offset(0f, 0f), end = Offset(0f, size.height), strokeWidth = 1.dp.toPx())
+    }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Top) {
+        Spacer(Modifier.height(16.dp))
         var isLogcatRunning by remember { mutableStateOf(false) }
-        UtilityIcon(
-            icon = if (isLogcatRunning) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-            tooltip = "Logcat Monitor",
-            // = if (isLogcatRunning) Color(0xFF6B9F78) else Color.Gray
-        ) {
+        UtilityIcon(icon = if (isLogcatRunning) Icons.Default.Visibility else Icons.Default.VisibilityOff, tooltip = "Logcat Monitor") {
             isLogcatRunning = !isLogcatRunning
             onLogcatClick(isLogcatRunning)
         }
-
         Spacer(Modifier.height(24.dp))
-
-        // File Explorer
         UtilityIcon(Icons.Default.Folder, "File Explorer") { onFileExplorerClick() }
-
         Spacer(Modifier.height(24.dp))
-
-        // Flash (Caution)
-        UtilityIcon(Icons.Default.FlashOn, "Batch Flash") {
-            onFlashClick(File("boot.img"))
-        }
-
+        UtilityIcon(Icons.Default.FlashOn, "Batch Flash") { onFlashClick(File("boot.img")) }
         Spacer(Modifier.weight(1f))
-
-        // Clear Data (Danger)
-        UtilityIcon(Icons.Default.DeleteSweep, "Clear App Data") {
-            onClearDataClick()
-        }
-
+        UtilityIcon(Icons.Default.DeleteSweep, "Clear App Data") { onClearDataClick() }
         Spacer(Modifier.height(16.dp))
         UtilityIcon(Icons.Default.Settings, "Settings") {}
         Spacer(Modifier.height(16.dp))
@@ -301,39 +221,22 @@ fun UtilitySideBar(
 
 @Composable
 fun UtilityIcon(icon: ImageVector, tooltip: String, onClick: () -> Unit) {
-    // 実際にはTooltipArea等を使うと良い
-    IconButton(onClick = onClick) {
-        Icon(icon, contentDescription = tooltip, tint = Color.Gray)
-    }
+    IconButton(onClick = onClick) { Icon(icon, contentDescription = tooltip, tint = Color.Gray) }
 }
 
 @Composable
-fun InputTextDialog(onDismiss: () -> Unit,onSend: (String) -> Unit) {
+fun InputTextDialog(onDismiss: () -> Unit, onSend: (String) -> Unit) {
     var text by remember { mutableStateOf("") }
     Dialog(onDismissRequest = onDismiss) {
-        Card(
-            shape = RoundedCornerShape(8.dp),
-            backgroundColor = Color(0xFF3C3F41),
-            modifier = Modifier.padding(16.dp)
-        ) {
+        Card(shape = RoundedCornerShape(8.dp), backgroundColor = Color(0xFF3C3F41), modifier = Modifier.padding(16.dp)) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("Send Text to Device", color = Color.White, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(8.dp))
-                TextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    placeholder = { Text("https://...") },
-                    colors = TextFieldDefaults.textFieldColors(
-                        textColor = Color.White,
-                        cursorColor = Color.White,
-                        backgroundColor = Color(0xFF2B2D30)
-                    )
-                )
+                TextField(value = text, onValueChange = { text = it }, placeholder = { Text("Text...") },
+                    colors = TextFieldDefaults.textFieldColors(textColor = Color.White, cursorColor = Color.White, backgroundColor = Color(0xFF2B2D30)))
                 Spacer(Modifier.height(16.dp))
                 Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                    Button(onClick = { onSend(text) }) {
-                        Text("Send")
-                    }
+                    Button(onClick = { onSend(text) }) { Text("Send") }
                 }
             }
         }
