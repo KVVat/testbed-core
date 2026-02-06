@@ -1,28 +1,3 @@
-File: scripts/setup_tools.sh
-#!/bin/bash
-# SDK Platform-Toolsを自動インストールするスクリプト (macOS/Linux用)
-
-PLATFORM_TOOLS_DIR="./bin/platform-tools"
-OS_TYPE="$(uname -s)"
-
-if [ ! -d "$PLATFORM_TOOLS_DIR" ]; then
-    echo "Installing SDK Platform-Tools..."
-    mkdir -p bin
-
-    if [ "$OS_TYPE" == "Darwin" ]; then
-        URL="https://dl.google.com/android/repository/platform-tools-latest-darwin.zip"
-    else
-        URL="https://dl.google.com/android/repository/platform-tools-latest-linux.zip"
-    fi
-
-    curl -L "$URL" -o bin/tools.zip
-    unzip bin/tools.zip -d bin/
-    rm bin/tools.zip
-    echo "✅ Platform-Tools installed in $PLATFORM_TOOLS_DIR"
-else
-    echo "✅ Platform-Tools already exists."
-fi
-
 File: composeApp/src/jvmMain/kotlin/org/example/project/adb/AdbObserver.kt
 package org.example.project.adb
 
@@ -57,23 +32,65 @@ class AdbObserver(private val viewModel: AppViewModel) {
     private var logcatJob: Job? = null
 
     /**
-     * 依存関係（adbバイナリ）が実行可能かチェックします。
+     * adbバイナリの有効なパスを解決します。
+     * 1. プロジェクトローカル (bin/platform-tools)
+     * 2. 各OSの標準Android SDKパス
+     * 3. システム環境変数 PATH
+     */
+    private fun resolveAdbPath(): String? {
+        val osName = System.getProperty("os.name").lowercase()
+        val adbName = if (osName.contains("win")) "adb.exe" else "adb"
+        val home = System.getProperty("user.home")
+
+        // 1. プロジェクトローカル
+        val localAdb = File("bin/platform-tools/$adbName")
+        if (localAdb.exists() && localAdb.canExecute()) return localAdb.absolutePath
+
+        // 2. OSごとの標準SDKパス
+        val sdkPaths = mutableListOf<String>()
+        when {
+            osName.contains("mac") -> {
+                sdkPaths.add("$home/Library/Android/sdk/platform-tools/$adbName")
+            }
+            osName.contains("win") -> {
+                val localAppData = System.getenv("LOCALAPPDATA")
+                if (localAppData != null) {
+                    sdkPaths.add("$localAppData\\Android\\Sdk\\platform-tools\\$adbName")
+                }
+            }
+            osName.contains("linux") -> {
+                sdkPaths.add("$home/Android/Sdk/platform-tools/$adbName")
+                sdkPaths.add("/usr/lib/android-sdk/platform-tools/$adbName")
+            }
+        }
+
+        for (path in sdkPaths) {
+            val file = File(path)
+            if (file.exists() && file.canExecute()) return file.absolutePath
+        }
+
+        // 3. システムパスのチェック (which / where)
+        val inPath = try {
+            val checkCmd = if (osName.contains("win")) "where" else "which"
+            val process = ProcessBuilder(checkCmd, adbName).start()
+            if (process.waitFor() == 0) adbName else null
+        } catch (e: Exception) {
+            null
+        }
+
+        return inPath
+    }
+
+    /**
+     * 依存関係のチェックルーチン
      */
     fun checkDependencies(): Boolean {
-        val localAdb = File("bin/platform-tools/adb")
-        val isLocalOk = localAdb.exists() && localAdb.canExecute()
-
-        // システムパスのadbも確認
-        val isSystemOk = try {
-            Runtime.getRuntime().exec("adb --version").waitFor() == 0
-        } catch (e: Exception) {
-            false
-        }
-
-        if (!isLocalOk && !isSystemOk) {
-            viewModel.log("SETUP", "Critical Error: 'adb' not found. Please run setup script.", LogLevel.ERROR)
+        val path = resolveAdbPath()
+        if (path == null) {
+            viewModel.log("SETUP", "Critical: 'adb' not found. Run the setup script for your OS.", LogLevel.ERROR)
             return false
         }
+        viewModel.log("SETUP", "ADB resolved: $path", LogLevel.PASS)
         return true
     }
 
@@ -82,25 +99,18 @@ class AdbObserver(private val viewModel: AppViewModel) {
             viewModel.log("ADB", "Cannot take screenshot: No device connected.", LogLevel.ERROR)
             return
         }
-
         withContext(Dispatchers.IO) {
             try {
                 viewModel.log("ADB", "Taking screenshot...", LogLevel.INFO)
                 val serial = adb.deviceSerial
                 val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
                 val remotePath = "/sdcard/screenshot_tmp.png"
-
                 val localDir = File("screenshots")
                 if (!localDir.exists()) localDir.mkdirs()
                 val localFile = File(localDir, "screenshot_$timestamp.png")
 
                 adb.adb.execute(ShellCommandRequest("screencap -p $remotePath"), serial)
-
-                val channel = adb.adb.execute(
-                    PullFileRequest(remotePath, localFile),
-                    this,
-                    serial
-                )
+                val channel = adb.adb.execute(PullFileRequest(remotePath, localFile), this, serial)
                 for (progress in channel) { }
 
                 adb.adb.execute(ShellCommandRequest("rm $remotePath"), serial)
@@ -117,12 +127,10 @@ class AdbObserver(private val viewModel: AppViewModel) {
             viewModel.log("ADB", "Input ignored: Text is empty.", LogLevel.WARN)
             return
         }
-        val hasNonAscii = text.any { it.code > 127 }
-        if (hasNonAscii) {
+        if (text.any { it.code > 127 }) {
             viewModel.log("ADB", "Input failed: Non-ASCII characters are not supported.", LogLevel.ERROR)
             return
         }
-
         withContext(Dispatchers.IO) {
             try {
                 val escapedText = text.replace(" ", "%s")
@@ -178,7 +186,6 @@ class AdbObserver(private val viewModel: AppViewModel) {
         val serial = adb.deviceSerial
         if (!viewModel.uiState.value.adbIsValid || serial.isBlank()) return
         if (logcatJob?.isActive == true) return
-
         logcatJob = viewModel.viewModelScope.launch(Dispatchers.IO) {
             val buffer = StringBuilder()
             try {
@@ -187,15 +194,12 @@ class AdbObserver(private val viewModel: AppViewModel) {
                     serial = serial,
                     scope = this
                 )
-
                 logChannel.consumeEach { chunk ->
                     buffer.append(chunk)
                     while (buffer.contains("\n")) {
                         val index = buffer.indexOf("\n")
                         val line = buffer.substring(0, index).trimEnd('\r', '\n')
-                        if (line.isNotBlank()) {
-                            viewModel.onLogcatReceived(line)
-                        }
+                        if (line.isNotBlank()) viewModel.onLogcatReceived(line)
                         buffer.delete(0, index + 1)
                     }
                 }
@@ -215,19 +219,13 @@ class AdbObserver(private val viewModel: AppViewModel) {
     }
 
     suspend fun observeAdb() {
-        // 起動時に依存関係をチェック
         checkDependencies()
-
         while (currentCoroutineContext().isActive) {
             try {
-                withContext(Dispatchers.IO) {
-                    adb.startAlone()
-                }
-
+                withContext(Dispatchers.IO) { adb.startAlone() }
                 while (currentCoroutineContext().isActive) {
                     delay(1000)
                     if (viewModel.uiState.value.isRunning) continue
-
                     if (adb.isDeviceInitialised()) {
                         if (!viewModel.uiState.value.adbIsValid) {
                             adbProps = AdbProps(adb.osversion, adb.productmodel, adb.deviceSerial, adb.displayId)
@@ -248,9 +246,7 @@ class AdbObserver(private val viewModel: AppViewModel) {
 
     suspend fun clearLogcatBuffer() {
         if (!viewModel.uiState.value.adbIsValid) return
-        withContext(Dispatchers.IO) {
-            adb.adb.execute(ShellCommandRequest("logcat -c"), adb.deviceSerial)
-        }
+        withContext(Dispatchers.IO) { adb.adb.execute(ShellCommandRequest("logcat -c"), adb.deviceSerial) }
     }
 }
 
@@ -266,10 +262,40 @@ data class CommandResult(val exitCode: Int, val output: String)
 
 class FastbootClient {
 
-    // プロジェクトローカルなバイナリを優先、なければシステムパス
+    /**
+     * fastbootバイナリの有効なパスを解決します。
+     * 1. プロジェクトローカル
+     * 2. 各OSの標準SDKパス
+     * 3. システムPATH
+     */
     private val executable: String by lazy {
-        val local = File("bin/platform-tools/fastboot")
-        if (local.exists() && local.canExecute()) local.absolutePath else "fastboot"
+        val osName = System.getProperty("os.name").lowercase()
+        val binName = if (osName.contains("win")) "fastboot.exe" else "fastboot"
+        val home = System.getProperty("user.home")
+
+        // 1. プロジェクトローカル
+        val local = File("bin/platform-tools/$binName")
+        if (local.exists() && local.canExecute()) return@lazy local.absolutePath
+
+        // 2. 各OSの標準パス
+        val sdkPaths = mutableListOf<String>()
+        if (osName.contains("mac")) {
+            sdkPaths.add("$home/Library/Android/sdk/platform-tools/$binName")
+        } else if (osName.contains("win")) {
+            val localAppData = System.getenv("LOCALAPPDATA")
+            if (localAppData != null) sdkPaths.add("$localAppData\\Android\\Sdk\\platform-tools\\$binName")
+        } else if (osName.contains("linux")) {
+            sdkPaths.add("$home/Android/Sdk/platform-tools/$binName")
+            sdkPaths.add("/usr/lib/android-sdk/platform-tools/$binName")
+        }
+
+        for (path in sdkPaths) {
+            val file = File(path)
+            if (file.exists() && file.canExecute()) return@lazy file.absolutePath
+        }
+
+        // 3. デフォルト (PATHに期待)
+        binName
     }
 
     private suspend fun executeCommand(vararg args: String): CommandResult = withContext(Dispatchers.IO) {

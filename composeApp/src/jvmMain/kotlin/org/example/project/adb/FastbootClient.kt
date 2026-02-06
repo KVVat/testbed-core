@@ -5,24 +5,53 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.TimeUnit
 
-// fastbootコマンドの実行結果を保持するデータクラス
 data class CommandResult(val exitCode: Int, val output: String)
 
 class FastbootClient {
 
-    private val executable: String = "fastboot"
+    /**
+     * fastbootバイナリの有効なパスを解決します。
+     * 1. プロジェクトローカル
+     * 2. 各OSの標準SDKパス
+     * 3. システムPATH
+     */
+    private val executable: String by lazy {
+        val osName = System.getProperty("os.name").lowercase()
+        val binName = if (osName.contains("win")) "fastboot.exe" else "fastboot"
+        val home = System.getProperty("user.home")
 
-    // ProcessBuilderを使ってコマンドを実行する共通関数
+        // 1. プロジェクトローカル
+        val local = File("bin/platform-tools/$binName")
+        if (local.exists() && local.canExecute()) return@lazy local.absolutePath
+
+        // 2. 各OSの標準パス
+        val sdkPaths = mutableListOf<String>()
+        if (osName.contains("mac")) {
+            sdkPaths.add("$home/Library/Android/sdk/platform-tools/$binName")
+        } else if (osName.contains("win")) {
+            val localAppData = System.getenv("LOCALAPPDATA")
+            if (localAppData != null) sdkPaths.add("$localAppData\\Android\\Sdk\\platform-tools\\$binName")
+        } else if (osName.contains("linux")) {
+            sdkPaths.add("$home/Android/Sdk/platform-tools/$binName")
+            sdkPaths.add("/usr/lib/android-sdk/platform-tools/$binName")
+        }
+
+        for (path in sdkPaths) {
+            val file = File(path)
+            if (file.exists() && file.canExecute()) return@lazy file.absolutePath
+        }
+
+        // 3. デフォルト (PATHに期待)
+        binName
+    }
+
     private suspend fun executeCommand(vararg args: String): CommandResult = withContext(Dispatchers.IO) {
         try {
             val process = ProcessBuilder(executable, *args)
                 .redirectErrorStream(true)
                 .start()
 
-            // タイムアウトを設けてプロセス終了を待つ
             process.waitFor(30, TimeUnit.SECONDS)
-
-            // 標準出力を読み取る
             val output = process.inputStream.bufferedReader().readText()
 
             CommandResult(process.exitValue(), output.trim())
@@ -31,26 +60,14 @@ class FastbootClient {
         }
     }
 
-    /**
-     * fastbootモードのデバイスリストを取得します。
-     * @return 検出されたデバイスのシリアル番号リスト
-     */
     suspend fun getDevices(): List<String> {
         val result = executeCommand("devices")
         if (result.exitCode == 0) {
-            // "serial_number    fastboot" の形式からシリアル番号のみを抽出
             return result.output.lines().filter { it.isNotBlank() }.map { it.split("\\s+".toRegex()).first() }
         }
         return emptyList()
     }
 
-    /**
-     * 指定されたパーティションにイメージファイルを書き込みます。
-     * @param serial デバイスのシリアル番号
-     * @param partition 書き込むパーティション名 (例: "boot")
-     * @param imageFile 書き込むイメージファイル
-     * @return コマンドの実行結果
-     */
     suspend fun flashPartition(serial: String, partition: String, imageFile: File): CommandResult {
         if (!imageFile.exists()) {
             return CommandResult(-1, "Image file not found: ${imageFile.absolutePath}")
@@ -58,11 +75,6 @@ class FastbootClient {
         return executeCommand("-s", serial, "flash", partition, imageFile.absolutePath)
     }
 
-    /**
-     * fastbootモードのデバイスを再起動します。
-     * @param serial デバイスのシリアル番号
-     * @return コマンドの実行結果
-     */
     suspend fun reboot(serial: String): CommandResult {
         return executeCommand("-s", serial, "reboot")
     }

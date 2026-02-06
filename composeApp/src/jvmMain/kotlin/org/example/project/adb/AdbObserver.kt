@@ -31,37 +31,87 @@ class AdbObserver(private val viewModel: AppViewModel) {
     private var logcatJob: Job? = null
 
     /**
-     * スクリーンショットを撮影し、ローカルに保存します。
+     * adbバイナリの有効なパスを解決します。
+     * 1. プロジェクトローカル (bin/platform-tools)
+     * 2. 各OSの標準Android SDKパス
+     * 3. システム環境変数 PATH
      */
+    private fun resolveAdbPath(): String? {
+        val osName = System.getProperty("os.name").lowercase()
+        val adbName = if (osName.contains("win")) "adb.exe" else "adb"
+        val home = System.getProperty("user.home")
+
+        // 1. プロジェクトローカル
+        val localAdb = File("bin/platform-tools/$adbName")
+        if (localAdb.exists() && localAdb.canExecute()) return localAdb.absolutePath
+
+        // 2. OSごとの標準SDKパス
+        val sdkPaths = mutableListOf<String>()
+        when {
+            osName.contains("mac") -> {
+                sdkPaths.add("$home/Library/Android/sdk/platform-tools/$adbName")
+            }
+            osName.contains("win") -> {
+                val localAppData = System.getenv("LOCALAPPDATA")
+                if (localAppData != null) {
+                    sdkPaths.add("$localAppData\\Android\\Sdk\\platform-tools\\$adbName")
+                }
+            }
+            osName.contains("linux") -> {
+                sdkPaths.add("$home/Android/Sdk/platform-tools/$adbName")
+                sdkPaths.add("/usr/lib/android-sdk/platform-tools/$adbName")
+            }
+        }
+
+        for (path in sdkPaths) {
+            val file = File(path)
+            if (file.exists() && file.canExecute()) return file.absolutePath
+        }
+
+        // 3. システムパスのチェック (which / where)
+        val inPath = try {
+            val checkCmd = if (osName.contains("win")) "where" else "which"
+            val process = ProcessBuilder(checkCmd, adbName).start()
+            if (process.waitFor() == 0) adbName else null
+        } catch (e: Exception) {
+            null
+        }
+
+        return inPath
+    }
+
+    /**
+     * 依存関係のチェックルーチン
+     */
+    fun checkDependencies(): Boolean {
+        val path = resolveAdbPath()
+        if (path == null) {
+            viewModel.log("SETUP", "Critical: 'adb' not found. Run the setup script for your OS.", LogLevel.ERROR)
+            return false
+        }
+        viewModel.log("SETUP", "ADB resolved: $path", LogLevel.PASS)
+        return true
+    }
+
     suspend fun captureScreenshot() {
         if (!viewModel.uiState.value.adbIsValid) {
             viewModel.log("ADB", "Cannot take screenshot: No device connected.", LogLevel.ERROR)
             return
         }
-
         withContext(Dispatchers.IO) {
             try {
                 viewModel.log("ADB", "Taking screenshot...", LogLevel.INFO)
                 val serial = adb.deviceSerial
                 val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
                 val remotePath = "/sdcard/screenshot_tmp.png"
-
                 val localDir = File("screenshots")
                 if (!localDir.exists()) localDir.mkdirs()
                 val localFile = File(localDir, "screenshot_$timestamp.png")
 
-                // デバイス側でキャプチャ
                 adb.adb.execute(ShellCommandRequest("screencap -p $remotePath"), serial)
+                val channel = adb.adb.execute(PullFileRequest(remotePath, localFile), this, serial)
+                for (progress in channel) { }
 
-                // PCへ転送
-                val channel = adb.adb.execute(
-                    PullFileRequest(remotePath, localFile),
-                    this,
-                    serial
-                )
-                for (progress in channel) { /* 進行状況は必要に応じて処理 */ }
-
-                // ゴミ掃除
                 adb.adb.execute(ShellCommandRequest("rm $remotePath"), serial)
                 viewModel.log("ADB", "Screenshot saved: ${localFile.absolutePath}", LogLevel.PASS)
             } catch (e: Exception) {
@@ -70,34 +120,21 @@ class AdbObserver(private val viewModel: AppViewModel) {
         }
     }
 
-    /**
-     * デバイスにテキストを送信します。
-     * 空文字のチェックと、非アスキー文字（マルチバイト文字）の制限を行っています。
-     */
     suspend fun sendText(text: String) {
         if (!viewModel.uiState.value.adbIsValid) return
-
-        // 1. 空文字または空白のみの場合は、adbコマンドの発行自体をスキップしてIllegalArgumentExceptionを回避
         if (text.isBlank()) {
             viewModel.log("ADB", "Input ignored: Text is empty.", LogLevel.WARN)
             return
         }
-
-        // 2. 非アスキー文字（Unicode > 127）が含まれているかチェック
-        // 日本語だけでなく、多言語のマルチバイト文字すべてを対象にします
-        val hasNonAscii = text.any { it.code > 127 }
-        if (hasNonAscii) {
-            viewModel.log("ADB", "Input failed: Non-ASCII characters are not supported via 'input text'.", LogLevel.ERROR)
+        if (text.any { it.code > 127 }) {
+            viewModel.log("ADB", "Input failed: Non-ASCII characters are not supported.", LogLevel.ERROR)
             return
         }
-
         withContext(Dispatchers.IO) {
             try {
-                // スペースを %s にエスケープ
                 val escapedText = text.replace(" ", "%s")
                 val command = "input text $escapedText"
                 val result = adb.adb.execute(ShellCommandRequest(command), adb.deviceSerial)
-
                 if (result.exitCode == 0) {
                     viewModel.log("ADB", "Text sent successfully: $text", LogLevel.PASS)
                 } else {
@@ -109,9 +146,6 @@ class AdbObserver(private val viewModel: AppViewModel) {
         }
     }
 
-    /**
-     * アプリデータを消去します。
-     */
     suspend fun clearAppData(packageName: String) {
         if (!viewModel.uiState.value.adbIsValid) return
         try {
@@ -124,9 +158,6 @@ class AdbObserver(private val viewModel: AppViewModel) {
         }
     }
 
-    /**
-     * ブートローダーモードで再起動します。
-     */
     suspend fun rebootToBootloader() {
         if (!viewModel.uiState.value.adbIsValid) return
         withContext(Dispatchers.IO) {
@@ -139,9 +170,6 @@ class AdbObserver(private val viewModel: AppViewModel) {
         }
     }
 
-    /**
-     * キーイベントを送信します。
-     */
     suspend fun sendKeyEvent(keyCode: Int) {
         if (!viewModel.uiState.value.adbIsValid) return
         withContext(Dispatchers.IO) {
@@ -153,15 +181,10 @@ class AdbObserver(private val viewModel: AppViewModel) {
         }
     }
 
-    /**
-     * Logcatのストリーミングを開始します。
-     */
     suspend fun startLogcat() {
         val serial = adb.deviceSerial
         if (!viewModel.uiState.value.adbIsValid || serial.isBlank()) return
-
         if (logcatJob?.isActive == true) return
-
         logcatJob = viewModel.viewModelScope.launch(Dispatchers.IO) {
             val buffer = StringBuilder()
             try {
@@ -170,15 +193,12 @@ class AdbObserver(private val viewModel: AppViewModel) {
                     serial = serial,
                     scope = this
                 )
-
                 logChannel.consumeEach { chunk ->
                     buffer.append(chunk)
                     while (buffer.contains("\n")) {
                         val index = buffer.indexOf("\n")
                         val line = buffer.substring(0, index).trimEnd('\r', '\n')
-                        if (line.isNotBlank()) {
-                            viewModel.onLogcatReceived(line)
-                        }
+                        if (line.isNotBlank()) viewModel.onLogcatReceived(line)
                         buffer.delete(0, index + 1)
                     }
                 }
@@ -192,28 +212,19 @@ class AdbObserver(private val viewModel: AppViewModel) {
         }
     }
 
-    /**
-     * Logcatのストリーミングを停止します。
-     */
     fun stopLogcat() {
         logcatJob?.cancel()
         logcatJob = null
     }
 
-    /**
-     * ADBデバイスの接続状態を監視し、自動再接続を行います。
-     */
     suspend fun observeAdb() {
+        checkDependencies()
         while (currentCoroutineContext().isActive) {
             try {
-                withContext(Dispatchers.IO) {
-                    adb.startAlone()
-                }
-
+                withContext(Dispatchers.IO) { adb.startAlone() }
                 while (currentCoroutineContext().isActive) {
                     delay(1000)
                     if (viewModel.uiState.value.isRunning) continue
-
                     if (adb.isDeviceInitialised()) {
                         if (!viewModel.uiState.value.adbIsValid) {
                             adbProps = AdbProps(adb.osversion, adb.productmodel, adb.deviceSerial, adb.displayId)
@@ -232,13 +243,9 @@ class AdbObserver(private val viewModel: AppViewModel) {
         }
     }
 
-    /**
-     * デバイス側のLogcatバッファをクリアします。
-     */
     suspend fun clearLogcatBuffer() {
         if (!viewModel.uiState.value.adbIsValid) return
-        withContext(Dispatchers.IO) {
-            adb.adb.execute(ShellCommandRequest("logcat -c"), adb.deviceSerial)
-        }
+        withContext(Dispatchers.IO) { adb.adb.execute(ShellCommandRequest("logcat -c"), adb.deviceSerial) }
     }
 }
+
