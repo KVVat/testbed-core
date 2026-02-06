@@ -1,222 +1,77 @@
-File: composeApp/src/jvmMain/kotlin/org/example/project/AppViewModel.kt
-package org.example.project
+File: settings.gradle.kts
+rootProject.name = "testbed-core"
 
-import java.time.LocalTime
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
-import org.example.project.adb.AdbObserver
-import org.example.project.adb.FastbootClient
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import java.io.File
-import java.io.FileOutputStream
-import java.nio.file.Paths
-import androidx.compose.runtime.mutableStateListOf
-import kotlinx.coroutines.withContext
-import java.io.IOException
-import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
-import java.util.Properties
-
-// 正確なパッケージパスを指定
-import org.example.project.junit.xmlreport.AntXmlRunListener
-import org.example.project.junit.JUnitTestRunner
-
-// テストクラスからアプリ本体のログ機能へアクセスするためのブリッジ
-object JUnitBridge {
-    var logging: ((String) -> Unit)? = null
-}
-
-data class TestPlugin(
-    val id: String,
-    val name: String,
-    val clazz: Class<*>,
-    val shortName: String,
-    val status: String = "Ready"
-)
-
-class AppViewModel : ViewModel() {
-    private val _uiState = MutableStateFlow(AppUiState())
-    val uiState = _uiState.asStateFlow()
-
-    private val _logFlow = MutableSharedFlow<LogLine>(replay = 100)
-    val logFlow = _logFlow.asSharedFlow()
-
-    private val _isLogcatWindowOpen = MutableStateFlow(false)
-    val isLogcatWindowOpen = _isLogcatWindowOpen.asStateFlow()
-
-    private val _logcatLines = mutableStateListOf<LogLine>()
-    val logcatLines: List<LogLine> get() = _logcatLines
-
-    private val _logcatFilter = MutableStateFlow("")
-    val logcatFilter = _logcatFilter.asStateFlow()
-
-    private val _testPlugins = mutableStateListOf<TestPlugin>()
-    val testPlugins: List<TestPlugin> get() = _testPlugins
-
-    private val adbObserver = AdbObserver(this)
-    private val fastbootClient = FastbootClient()
-
-    private val RAW_LOGCAT_FILE = File("raw_logcat_output.log")
-
-    init {
-        startAdbObservation()
-        // ブリッジにログ関数を登録
-        JUnitBridge.logging = ::logging
-
-        try {
-            // sampleパッケージ内のテストを登録
-            val testClass = Class.forName("org.example.project.sample.ComposeAppDesktopTest")
-            _testPlugins.add(TestPlugin("sample_01", "Sample Desktop Test", testClass, "SampleTest", "Ready"))
-        } catch (e: Exception) {
-            println("Sample Test class not found: ${e.message}")
-        }
-    }
-
-    fun toggleIsRunning(isRunning: Boolean) {
-        _uiState.update { it.copy(isRunning = isRunning) }
-    }
-
-    fun logging(message: String) {
-        log("JUnit", message, LogLevel.DEBUG)
-    }
-
-    private fun output_path(): String {
-        val dir = File("build/test-results").apply { mkdirs() }
-        return dir.absolutePath
-    }
-
-    fun runTest(plugin: TestPlugin) {
-        if (uiState.value.isRunning) return
-
-        viewModelScope.launch(Dispatchers.IO) {
-            toggleIsRunning(true)
-
-            log("TEST", ">>> START: ${plugin.name}", LogLevel.INFO)
-
-            val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
-            val props = Properties().apply {
-                setProperty("SFR.shortname", plugin.shortName)
-            }
-
-            var fos: FileOutputStream? = null
-            try {
-                // 正確なパッケージの AntXmlRunListener を使用
-                val antRunner = AntXmlRunListener(::logging, props) {
-                    viewModelScope.launch {
-                        toggleIsRunning(false)
-                        log("TEST", "<<< FINISH: ${plugin.name}", LogLevel.PASS)
-                    }
-                }
-
-                val reportFile = File(output_path(), "junit-report-${plugin.shortName}-$timestamp.xml")
-                fos = FileOutputStream(reportFile)
-                antRunner.setOutputStream(fos)
-
-                // JUnitTestRunner を使用して実行
-                val runner = JUnitTestRunner(arrayOf(plugin.clazz), antRunner)
-
-                // 実行 (同期実行を想定)
-                runner.start()
-
-                // XMLファイルを確実にディスクに書き出す
-                fos.flush()
-
-            } catch (e: Exception) {
-                log("TEST", "ERROR during execution: ${e.message}", LogLevel.ERROR)
-                toggleIsRunning(false)
-            } finally {
-                try {
-                    fos?.close()
-                } catch (e: Exception) {
-                    // クローズ時の例外はログに出すのみ
-                }
-            }
-        }
-    }
-
-    // --- 既存のメソッド（省略せず維持） ---
-
-    fun pressHome() = viewModelScope.launch { adbObserver.sendKeyEvent(3) }
-    fun pressBack() = viewModelScope.launch { adbObserver.sendKeyEvent(4) }
-    fun pressEnter() = viewModelScope.launch { adbObserver.sendKeyEvent(66) }
-
-    private fun startAdbObservation() {
-        viewModelScope.launch {
-            try { adbObserver.observeAdb() } catch (e: Exception) { log("ADB", "Observer error: ${e.message}", LogLevel.ERROR) }
-        }
-    }
-
-    fun toggleAdbIsValid(isValid: Boolean) {
-        _uiState.update { it.copy(adbIsValid = isValid) }
-        log("ADB", "Status: ${if (isValid) "Connected" else "Disconnected"}", if (isValid) LogLevel.PASS else LogLevel.ERROR)
-    }
-
-    fun log(tag: String, message: String, level: LogLevel = LogLevel.INFO) {
-        val timestamp = LocalTime.now().toString().take(8)
-        viewModelScope.launch { _logFlow.emit(LogLine(timestamp, tag, message, level)) }
-    }
-
-    fun captureScreenshot() { viewModelScope.launch { adbObserver.captureScreenshot() } }
-    fun sendText(text: String) { viewModelScope.launch { adbObserver.sendText(text) } }
-    fun clearAppData() { viewModelScope.launch { adbObserver.clearAppData("org.example.project") } }
-    fun openLogcatWindow() { _isLogcatWindowOpen.value = true; startLogcat() }
-    fun closeLogcatWindow() { _isLogcatWindowOpen.value = false; stopLogcat() }
-    fun startLogcat() { viewModelScope.launch { adbObserver.startLogcat() } }
-    fun stopLogcat() { adbObserver.stopLogcat() }
-    fun clearLogcat() { _logcatLines.clear(); viewModelScope.launch { adbObserver.clearLogcatBuffer() } }
-    fun updateLogcatFilter(text: String) { _logcatFilter.value = text }
-    fun onLogcatReceived(rawLine: String) {
-        writeRawLogcatToFile(rawLine)
-        val parsedLog = parseLogLine(rawLine) ?: LogLine("", "RAW", rawLine, LogLevel.INFO)
-        _logcatLines.add(parsedLog)
-    }
-    private fun parseLogLine(line: String): LogLine? {
-        val parts = line.trim().split(Regex("\\s+"))
-        if (parts.size < 5) return null
-        val body = line.substringAfter(parts[4]).trim()
-        return LogLine("${parts[0]} ${parts[1]}", body.substringBefore(":").trim(), body.substringAfter(":").trim(), LogLevel.INFO)
-    }
-    private fun writeRawLogcatToFile(line: String) {
-        viewModelScope.launch(Dispatchers.IO) { try { RAW_LOGCAT_FILE.appendText(line + "\n") } catch (e: IOException) {} }
+// リポジトリ定義を一括管理。これにより「no repositories are defined」を解消
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+        maven { url = uri("[https://maven.pkg.jetbrains.space/public/p/compose/developer](https://maven.pkg.jetbrains.space/public/p/compose/developer)") }
     }
 }
 
-File: composeApp/src/jvmMain/kotlin/org/example/project/sample/ComposeAppDesktopTest.kt
-package org.example.project.sample
+include(":composeApp")
+include(":test-plugin")
 
-import org.example.project.JUnitBridge
-import org.example.project.adb.rules.AdbDeviceRule
-import org.junit.Rule
-import org.junit.Test
+File: composeApp/build.gradle.kts
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
-class ComposeAppDesktopTest {
+plugins {
+    kotlin("multiplatform")
+    id("org.jetbrains.compose")
+    id("org.jetbrains.kotlin.plugin.compose")
+}
 
-    @get:Rule
-    val adbDeviceRule = AdbDeviceRule()
+kotlin {
+    jvm()
 
-    // JUnitBridge を通じて本体のログ機能を利用
-    private val logger = JUnitBridge.logging
-
-    @Test
-    fun outputTest() {
-        logger?.invoke("--- TEST START: outputTest ---")
-
-        // 標準出力
-        println("JUnit stdout: Connectivity check.")
-
-        // AdbDeviceRule の動作確認ログ
-        val serial = adbDeviceRule.deviceSerial
-        logger?.invoke("Target Device Serial: $serial")
-
-        Thread.sleep(500)
-
-        logger?.invoke("--- TEST FINISHED: Success ---")
+    sourceSets {
+        val jvmMain by getting {
+            dependencies {
+                implementation(compose.desktop.currentOs)
+                // 既存の依存関係を維持しつつ、必要なものを追加
+                implementation(libs.junit)
+                implementation("com.malinskiy.adam:adam:0.5.10")
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.0")
+            }
+        }
+        val jvmTest by getting {
+            dependencies {
+                implementation(kotlin("test"))
+            }
+        }
     }
+}
+
+compose.desktop {
+    application {
+        mainClass = "org.example.project.MainKt"
+        nativeDistributions {
+            targetFormats(org.jetbrains.compose.desktop.application.dsl.TargetFormat.Dmg, org.jetbrains.compose.desktop.application.dsl.TargetFormat.Msi, org.jetbrains.compose.desktop.application.dsl.TargetFormat.Deb)
+            packageName = "org.example.project"
+            packageVersion = "1.0.0"
+        }
+    }
+}
+
+File: test-plugin/build.gradle.kts
+plugins {
+    kotlin("jvm")
+}
+
+dependencies {
+    // メインアプリのクラス（AdbDeviceRule, JUnitBridge等）を参照
+    implementation(project(":composeApp"))
+
+    // JUnit 4 (本体と合わせる)
+    implementation("junit:junit:4.13.2")
+
+    // adam (0.5.10)
+    implementation("com.malinskiy.adam:adam:0.5.10")
+}
+
+tasks.jar {
+    archiveFileName.set("sample-test-plugin.jar")
+    // ビルドしたJARをメインアプリが読み込む plugins ディレクトリへ自動出力
+    destinationDirectory.set(file("${rootProject.projectDir}/plugins"))
 }

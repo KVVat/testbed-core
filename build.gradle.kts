@@ -7,6 +7,7 @@ plugins {
     alias(libs.plugins.kotlinMultiplatform) apply false
 
 }
+
 // build.gradle.kts
 
 tasks.register("applyPatch") {
