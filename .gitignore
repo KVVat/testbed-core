@@ -29,7 +29,8 @@ local.properties
 # Environment variables
 .env
 
-repomix-patch.txt
+repomix*
+.repomixignore
 
 bin/
 composeApp/plugins
