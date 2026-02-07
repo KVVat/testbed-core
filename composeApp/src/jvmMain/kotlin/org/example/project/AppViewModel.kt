@@ -39,6 +39,7 @@ object JUnitBridge {
     var configFilePath: String = ""
 }
 
+
 data class TestPlugin(
     val id: String,
     val name: String,
