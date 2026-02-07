@@ -26,8 +26,17 @@ import java.util.Properties
 import org.example.project.junit.xmlreport.AntXmlRunListener
 import org.example.project.junit.JUnitTestRunner
 
+enum class TestLogLevel {
+    DEBUG, INFO, PASS, WARN, ERROR
+}
+
 object JUnitBridge {
-    var logging: ((String) -> Unit)? = null
+    // StringとLevelをセットで受け取る関数に変更
+    var logging: ((String, TestLogLevel) -> Unit)? = null
+
+    // パス情報
+    var resourceDir: String = ""
+    var configFilePath: String = ""
 }
 
 data class TestPlugin(
@@ -65,7 +74,21 @@ class AppViewModel : ViewModel() {
 
     init {
         startAdbObservation()
-        JUnitBridge.logging = ::logging
+        JUnitBridge.logging = { message, level ->
+            val internalLevel = when(level) {
+                TestLogLevel.DEBUG -> LogLevel.DEBUG
+                TestLogLevel.INFO -> LogLevel.INFO
+                TestLogLevel.PASS -> LogLevel.PASS
+                TestLogLevel.WARN -> LogLevel.WARN
+                TestLogLevel.ERROR -> LogLevel.ERROR
+            }
+            // タグは PLUGIN 固定、または動的に取得
+            log("PLUGIN", message, internalLevel)
+        }
+
+        val currentDir = File(".").absolutePath
+        JUnitBridge.resourceDir = File(currentDir, "resources").absolutePath
+        JUnitBridge.configFilePath = File(currentDir, "config/settings.json").absolutePath
 
         // 起動時にプラグインディレクトリからJARをロード
         loadPluginsFromDir()
