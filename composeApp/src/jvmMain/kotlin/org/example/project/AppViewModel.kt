@@ -75,41 +75,71 @@ class AppViewModel : ViewModel() {
      * pluginsディレクトリ内のJARファイルをスキャンし、テストクラスをロードします。
      */
     fun loadPluginsFromDir() {
-        if (!PLUGINS_DIR.exists()) PLUGINS_DIR.mkdirs()
-
-        val jarFiles = PLUGINS_DIR.listFiles { file -> file.extension == "jar" } ?: return
+        // pluginsディレクトリの存在確認と作成
+        if (!PLUGINS_DIR.exists()) {
+            PLUGINS_DIR.mkdirs()
+            log("SYSTEM", "Plugins directory created: ${PLUGINS_DIR.absolutePath}", LogLevel.INFO)
+        }
 
         viewModelScope.launch(Dispatchers.IO) {
+            log("SYSTEM", "Scanning for plugins in subdirectories...", LogLevel.INFO)
+
+            // walk() を使用してサブディレクトリ内も再帰的に JAR を探索
+            val jarFiles = PLUGINS_DIR.walk()
+                .filter { it.isFile && it.extension == "jar" }
+                .toList()
+
+            if (jarFiles.isEmpty()) {
+                log("SYSTEM", "No plugin JARs found in ${PLUGINS_DIR.name}", LogLevel.INFO)
+                return@launch
+            }
+
             jarFiles.forEach { jarFile ->
                 try {
+                    // JARごとにURLClassLoaderを作成
                     val loader = URLClassLoader(arrayOf(jarFile.toURI().toURL()), this.javaClass.classLoader)
+
                     JarFile(jarFile).use { jar ->
                         val entries = jar.entries()
                         while (entries.hasMoreElements()) {
                             val entry = entries.nextElement()
-                            if (entry.name.endsWith(".class")) {
+
+                            // クラスファイルであり、かつ無名クラス/内部クラス($)を除外
+                            if (entry.name.endsWith(".class") && !entry.name.contains("$")) {
                                 val className = entry.name.replace("/", ".").removeSuffix(".class")
+
                                 try {
                                     val clazz = loader.loadClass(className)
-                                    // JUnit 4の @Test アノテーションを持つメソッドがあるか確認
-                                    if (clazz.methods.any { it.isAnnotationPresent(org.junit.Test::class.java) }) {
+
+                                    // @Test アノテーションが付与されたメソッドの有無を確認
+                                    val hasTestAnnotation = clazz.methods.any {
+                                        it.isAnnotationPresent(org.junit.Test::class.java)
+                                    }
+
+                                    if (hasTestAnnotation) {
                                         withContext(Dispatchers.Main) {
+                                            // 重複登録の防止
                                             if (_testPlugins.none { it.clazz == clazz }) {
+                                                // フォルダ名を取得して識別しやすくする
+                                                val parentDirName = jarFile.parentFile.name
                                                 _testPlugins.add(TestPlugin(
-                                                    id = jarFile.nameWithoutExtension,
-                                                    name = clazz.simpleName,
+                                                    id = "${parentDirName}_${clazz.simpleName}",
+                                                    name = "[$parentDirName] ${clazz.simpleName}",
                                                     clazz = clazz,
                                                     shortName = clazz.simpleName
                                                 ))
+                                                log("SYSTEM", "Plugin loaded: ${clazz.simpleName} (from $parentDirName)", LogLevel.PASS)
                                             }
                                         }
                                     }
-                                } catch (e: Throwable) { /* 個別のクラスロード失敗は無視 */ }
+                                } catch (e: Throwable) {
+                                    // クラスロード失敗はスキップ
+                                }
                             }
                         }
                     }
                 } catch (e: Exception) {
-                    log("SYSTEM", "Failed to load jar: ${jarFile.name}", LogLevel.ERROR)
+                    log("SYSTEM", "Failed to load JAR [${jarFile.name}]: ${e.message}", LogLevel.ERROR)
                 }
             }
         }

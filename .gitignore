@@ -30,3 +30,6 @@ local.properties
 .env
 
 repomix-patch.txt
+
+composeApp/plugins
+composeApp/screenshots

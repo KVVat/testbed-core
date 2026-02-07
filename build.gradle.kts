@@ -8,6 +8,16 @@ plugins {
 
 }
 
+// コンパイルオプションを統一して、プラグイン側とのバイナリ互換性を保証
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        // 必要に応じて特定の言語機能を有効化
+        freeCompilerArgs.add("-Xjsr305=strict")
+    }
+}
+
+
 // build.gradle.kts
 
 tasks.register("applyPatch") {
