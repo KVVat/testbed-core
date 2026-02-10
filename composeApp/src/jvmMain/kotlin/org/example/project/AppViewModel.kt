@@ -156,6 +156,24 @@ class AppViewModel : ViewModel() {
         }
     }
 
+    /**
+     * Clears the current loaded plugins and rescans the directory.
+     * This is useful for development to load updated JARs without restarting the app.
+     */
+    fun refreshPlugins() {
+        if (uiState.value.isRunning) {
+            log("SYSTEM", "Cannot reload plugins while test is running.", LogLevel.WARN)
+            return
+        }
+
+        viewModelScope.launch {
+            _testPlugins.clear()
+            log("SYSTEM", "Plugins list cleared. Rescanning...", LogLevel.INFO)
+            loadPluginsFromDir()
+            log("SYSTEM", "Plugins reloaded.", LogLevel.PASS)
+        }
+    }
+
     fun toggleIsRunning(isRunning: Boolean) {
         _uiState.update { it.copy(isRunning = isRunning) }
     }

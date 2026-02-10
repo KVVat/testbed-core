@@ -50,6 +50,7 @@ fun App() {
                     isRunning = uiState.isRunning,
                     testPlugins = viewModel.testPlugins,
                     onRunTest = { viewModel.runTest(it) },
+                    onRefreshPlugins = { viewModel.refreshPlugins() },
                     onBackClick = { viewModel.pressBack() },
                     onHomeClick = { viewModel.pressHome() },
                     onSendText = { text -> viewModel.sendText(text) },
@@ -83,6 +84,7 @@ fun TopControlBar(
     isRunning: Boolean,
     testPlugins: List<TestPlugin>,
     onRunTest: (TestPlugin) -> Unit,
+    onRefreshPlugins: () -> Unit, // <--- New Parameter
     onBackClick: () -> Unit,
     onHomeClick: () -> Unit,
     onSendText: (String) -> Unit,
@@ -130,6 +132,19 @@ fun TopControlBar(
                         }
                     }
                 }
+                // --- INSERT START ---
+                Spacer(Modifier.width(4.dp))
+                IconButton(
+                    onClick = onRefreshPlugins,
+                    enabled = !isRunning
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Reload Plugins",
+                        tint = if (isRunning) Color.Gray else Color(0xFFCCCCCC)
+                    )
+                }
+                // --- INSERT END ---
                 Spacer(Modifier.width(12.dp))
                 Divider(Modifier.height(24.dp).width(1.dp), color = Color.Gray)
                 Spacer(Modifier.width(12.dp))
