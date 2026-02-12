@@ -3,14 +3,20 @@ package org.example.project
 
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.*
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -25,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.launch
 import java.io.File
 
 @Composable
@@ -41,43 +48,99 @@ fun App() {
 
     val uiState by viewModel.uiState.collectAsState()
     val isLogcatWindowOpen by viewModel.isLogcatWindowOpen.collectAsState()
+    val scope = rememberCoroutineScope()
+    val drawerState =
+        androidx.compose.material3.rememberDrawerState(initialValue =
+            androidx.compose.material3.DrawerValue.Closed)
+        //rememberDrawerState(initialValue = DrawerValue.Closed)
 
-    MaterialTheme(colors = darkColors()) {
-        Scaffold(
-            topBar = {
-                TopControlBar(
-                    adbConnected = uiState.adbIsValid,
-                    isRunning = uiState.isRunning,
-                    testPlugins = viewModel.testPlugins,
-                    onRunTest = { viewModel.runTest(it) },
-                    onRefreshPlugins = { viewModel.refreshPlugins() },
-                    onBackClick = { viewModel.pressBack() },
-                    onHomeClick = { viewModel.pressHome() },
-                    onSendText = { text -> viewModel.sendText(text) },
-                    onScreenshotClick = { viewModel.captureScreenshot() }
-                )
-            },
-            content = { padding ->
-                Row(modifier = Modifier.padding(padding).fillMaxSize()) {
-                    LogConsole(logs = logLines, modifier = Modifier.weight(1f))
-                    UtilitySideBar(
-                        onLogcatClick = { enable: Boolean ->
-                            if (enable) viewModel.openLogcatWindow() else viewModel.closeLogcatWindow()
-                        },
-                        onFileExplorerClick = { },
-                        onFlashClick = { file: File -> /* viewModel.batchFlashBootImage(file) */ },
-                        onClearDataClick = { viewModel.clearAppData() }
+    MaterialTheme(colorScheme = darkColorScheme()) {
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            drawerContent = {
+                // 2. Drawer の中身（詳細が見れるテスト一覧）
+                ModalDrawerSheet(
+                    drawerContainerColor = Color(0xFF2B2D30),
+                    modifier = Modifier.width(300.dp)
+                ) {
+                    TestListDrawerContent(
+                        testPlugins = viewModel.testPlugins,
+                        onRunTest = { plugin ->
+                            viewModel.runTest(plugin)
+                            scope.launch { drawerState.close() }
+                        }
                     )
                 }
             }
-        )
-    }
+        ) {
+            Scaffold(
 
-    if (isLogcatWindowOpen) {
-        LogcatWindow(viewModel = viewModel, onCloseRequest = { viewModel.closeLogcatWindow() })
+                topBar = {
+                    TopControlBar(
+                        adbConnected = uiState.adbIsValid,
+                        isRunning = uiState.isRunning,
+                        testPlugins = viewModel.testPlugins,
+                        onRunTest = { viewModel.runTest(it) },
+                        onRefreshPlugins = { viewModel.refreshPlugins() },
+                        onBackClick = { viewModel.pressBack() },
+                        onHomeClick = { viewModel.pressHome() },
+                        onSendText = { text -> viewModel.sendText(text) },
+                        onScreenshotClick = { viewModel.captureScreenshot() },
+                        onMenuClick = { scope.launch { drawerState.open() } }
+                    )
+                },
+                content = { padding ->
+                    Row(modifier = Modifier.padding(padding).fillMaxSize()) {
+                        LogConsole(logs = logLines, modifier = Modifier.weight(1f))
+                        UtilitySideBar(
+                            onLogcatClick = { enable: Boolean ->
+                                if (enable) viewModel.openLogcatWindow() else viewModel.closeLogcatWindow()
+                            },
+                            onFileExplorerClick = { },
+                            onFlashClick = { file: File -> /* viewModel.batchFlashBootImage(file) */ },
+                            onClearDataClick = { viewModel.clearAppData() }
+                        )
+                    }
+                }
+            )
+        }
+
+        if (isLogcatWindowOpen) {
+            LogcatWindow(viewModel = viewModel, onCloseRequest = { viewModel.closeLogcatWindow() })
+        }
+    }
+}
+@Composable
+fun TestListDrawerContent(
+    testPlugins: List<TestPlugin>,
+    onRunTest: (TestPlugin) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Text("Available Tests", style = MaterialTheme.typography.bodySmall, color = Color.White)
+        Spacer(Modifier.height(16.dp))
+
+        LazyColumn {
+            items(testPlugins) { plugin ->
+                NavigationDrawerItem(
+                    label = {
+                        Column {
+                            Text(plugin.name, fontWeight = FontWeight.Bold)
+                            // 詳細情報の例：IDや説明文を表示
+                            Text("ID: ${plugin.id}", fontSize = 11.sp, color = Color.Gray)
+                        }
+                    },
+                    selected = false,
+                    onClick = { onRunTest(plugin) },
+                    icon = { Icon(Icons.Default.Science, null) },
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+            }
+        }
     }
 }
 
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TopControlBar(
     adbConnected: Boolean,
@@ -88,14 +151,26 @@ fun TopControlBar(
     onBackClick: () -> Unit,
     onHomeClick: () -> Unit,
     onSendText: (String) -> Unit,
-    onScreenshotClick: () -> Unit
+    onScreenshotClick: () -> Unit,
+    onMenuClick: () -> Unit
 ) {
     TopAppBar(
-        backgroundColor = Color(0xFF2B2D30),
-        contentColor = Color.White,
-        elevation = 0.dp,
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = Color(0xFF2B2D30), // backgroundColor の代わり
+            titleContentColor = Color.White,    // contentColor の代わり
+            actionIconContentColor = Color.White
+        ),
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // ハンバーガーアイコン
+                    IconButton(onClick = onMenuClick, enabled = !isRunning) {
+                        Icon(Icons.Default.Menu, contentDescription = "Open Test Menu")
+                    }
+                    Text("Test Explorer", fontSize = 16.sp)
+                    // ...
+                }
+                /*
                 var testMenuExpanded by remember { mutableStateOf(false) }
                 Box {
                     TextButton(
@@ -131,7 +206,7 @@ fun TopControlBar(
                             }
                         }
                     }
-                }
+                }*/
                 // --- INSERT START ---
                 Spacer(Modifier.width(4.dp))
                 IconButton(
@@ -245,12 +320,29 @@ fun UtilityIcon(icon: ImageVector, tooltip: String, onClick: () -> Unit) {
 fun InputTextDialog(onDismiss: () -> Unit, onSend: (String) -> Unit) {
     var text by remember { mutableStateOf("") }
     Dialog(onDismissRequest = onDismiss) {
-        Card(shape = RoundedCornerShape(8.dp), backgroundColor = Color(0xFF3C3F41), modifier = Modifier.padding(16.dp)) {
+        // Card の引数を containerColor に変更
+        Card(
+            shape = RoundedCornerShape(8.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF3C3F41)),
+            modifier = Modifier.padding(16.dp)
+        ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("Send Text to Device", color = Color.White, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(8.dp))
-                TextField(value = text, onValueChange = { text = it }, placeholder = { Text("Text...") },
-                    colors = TextFieldDefaults.textFieldColors(textColor = Color.White, cursorColor = Color.White, backgroundColor = Color(0xFF2B2D30)))
+
+                // TextField の colors 指定を Material 3 仕様に変更
+                TextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    placeholder = { Text("Text...") },
+                    colors = TextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        cursorColor = Color.White,
+                        focusedContainerColor = Color(0xFF2B2D30),
+                        unfocusedContainerColor = Color(0xFF2B2D30)
+                    )
+                )
                 Spacer(Modifier.height(16.dp))
                 Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
                     Button(onClick = { onSend(text) }) { Text("Send") }

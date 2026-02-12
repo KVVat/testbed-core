@@ -31,7 +31,11 @@ kotlin {
             implementation(libs.compose.runtime)
             implementation(libs.compose.foundation)
             implementation(libs.compose.material3)
+            implementation(libs.compose.ui)
+
+            implementation("org.jetbrains.compose.components:components-resources:1.10.0")
             implementation("org.jetbrains.compose.material:material-icons-extended:1.7.3")
+            //implementation("org.jetbrains.compose.material:material-icons-extended:1.7.3")
             implementation(libs.compose.components.resources)
             implementation(libs.compose.uiToolingPreview)
             implementation(libs.androidx.lifecycle.viewmodelCompose)
@@ -47,6 +51,7 @@ kotlin {
         jvmMain.dependencies {
             implementation(compose.desktop.currentOs)
             implementation(libs.kotlinx.coroutinesSwing)
+            implementation(libs.androidx.material3.desktop)
             // AdbDeviceRule.kt が jvmMain にあるが、JUnitはcommonMainで提供されるため不要
         }
     }
