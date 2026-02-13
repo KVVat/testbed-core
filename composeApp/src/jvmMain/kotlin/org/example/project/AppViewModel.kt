@@ -25,6 +25,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Properties
 import org.example.project.junit.xmlreport.AntXmlRunListener
 import org.example.project.junit.JUnitTestRunner
+import org.example.project.tools.LogcatParser
 
 
 data class TestPlugin(
@@ -33,6 +34,11 @@ data class TestPlugin(
     val clazz: Class<*>,
     val shortName: String,
     val status: String = "Ready"
+)
+
+data class AppSettings(
+    val autoOpenLogcat: Boolean = true,
+    val logcatBufferSize: Int = 2000
 )
 
 class AppViewModel : ViewModel() {
@@ -60,7 +66,12 @@ class AppViewModel : ViewModel() {
     private val RAW_LOGCAT_FILE = File("raw_logcat_output.log")
     private val PLUGINS_DIR = File("plugins")
 
+    private val SETTINGS_FILE = File("app_settings.properties")
+    private val _appSettings = MutableStateFlow(AppSettings())
+    val appSettings = _appSettings.asStateFlow()
+
     init {
+        loadSettings()
         startAdbObservation()
         JUnitBridge.logging = { message, level ->
             val internalLevel = when(level) {
@@ -82,6 +93,33 @@ class AppViewModel : ViewModel() {
         loadPluginsFromDir()
     }
 
+    private fun loadSettings() {
+        if (SETTINGS_FILE.exists()) {
+            try {
+                val props = Properties().apply { load(SETTINGS_FILE.inputStream()) }
+                _appSettings.value = AppSettings(
+                    autoOpenLogcat = props.getProperty("autoOpenLogcat", "true").toBoolean(),
+                    logcatBufferSize = props.getProperty("logcatBufferSize", "2000").toIntOrNull() ?: 2000
+                )
+            } catch (e: Exception) {
+                log("SYSTEM", "Failed to load settings: ${e.message}", LogLevel.ERROR)
+            }
+        }
+    }
+
+    fun saveSettings(newSettings: AppSettings) {
+        _appSettings.value = newSettings
+        try {
+            val props = Properties().apply {
+                setProperty("autoOpenLogcat", newSettings.autoOpenLogcat.toString())
+                setProperty("logcatBufferSize", newSettings.logcatBufferSize.toString())
+            }
+            props.store(SETTINGS_FILE.outputStream(), "App Settings")
+            log("SYSTEM", "Settings saved.", LogLevel.INFO)
+        } catch (e: Exception) {
+            log("SYSTEM", "Failed to save settings: ${e.message}", LogLevel.ERROR)
+        }
+    }
     /**
      * pluginsディレクトリ内のJARファイルをスキャンし、テストクラスをロードします。
      */
@@ -245,9 +283,41 @@ class AppViewModel : ViewModel() {
         }
     }
 
+
     fun toggleAdbIsValid(isValid: Boolean) {
         _uiState.update { it.copy(adbIsValid = isValid) }
         log("ADB", "Status: ${if (isValid) "Connected" else "Disconnected"}", if (isValid) LogLevel.PASS else LogLevel.ERROR)
+
+        // ★追加: 接続状態が変わったときのLogcatの自動制御
+        if (isValid && _isLogcatWindowOpen.value) {
+            startLogcat() // 接続されて、ウィンドウが開いていれば開始
+        } else if (!isValid) {
+            stopLogcat()  // 切断されたら止める
+        }
+    }
+
+    fun openLogcatWindow() {
+        _isLogcatWindowOpen.value = true
+        // 状態を変えるだけで、ここですぐにstartLogcat()は呼ばない（または安全に呼ぶ）
+        startLogcat()
+    }
+
+    fun closeLogcatWindow() {
+        _isLogcatWindowOpen.value = false
+        stopLogcat()
+    }
+
+    fun startLogcat() {
+        // ★追加: デバイス未接続の時は ADB コマンドを叩かないようにガードする
+        if (!uiState.value.adbIsValid) {
+            log("Logcat", "Waiting for device connection to start logcat...", LogLevel.WARN)
+            return
+        }
+        viewModelScope.launch { adbObserver.startLogcat() }
+    }
+
+    fun stopLogcat() {
+        adbObserver.stopLogcat()
     }
 
     fun log(tag: String, message: String, level: LogLevel = LogLevel.INFO) {
@@ -258,22 +328,51 @@ class AppViewModel : ViewModel() {
     fun captureScreenshot() { viewModelScope.launch { adbObserver.captureScreenshot() } }
     fun sendText(text: String) { viewModelScope.launch { adbObserver.sendText(text) } }
     fun clearAppData() { viewModelScope.launch { adbObserver.clearAppData("org.example.project") } }
-    fun openLogcatWindow() { _isLogcatWindowOpen.value = true; startLogcat() }
-    fun closeLogcatWindow() { _isLogcatWindowOpen.value = false; stopLogcat() }
-    fun startLogcat() { viewModelScope.launch { adbObserver.startLogcat() } }
-    fun stopLogcat() { adbObserver.stopLogcat() }
     fun clearLogcat() { _logcatLines.clear(); viewModelScope.launch { adbObserver.clearLogcatBuffer() } }
     fun updateLogcatFilter(text: String) { _logcatFilter.value = text }
+
+    companion object {
+        private const val MAX_LOG_LINES = 2000
+    }
+
     fun onLogcatReceived(rawLine: String) {
         writeRawLogcatToFile(rawLine)
-        val parsedLog = parseLogLine(rawLine) ?: LogLine("", "RAW", rawLine, LogLevel.INFO)
+        val parsedLog = LogcatParser.parse(rawLine) ?: LogLine("", "RAW", rawLine, LogLevel.INFO)
         _logcatLines.add(parsedLog)
+        val limit = appSettings.value.logcatBufferSize
+        if (_logcatLines.size > limit) {
+            _logcatLines.removeRange(0, _logcatLines.size - MAX_LOG_LINES)
+        }
     }
+//    private fun parseLogLine(line: String): LogLine? {
+//        val parts = line.trim().split(Regex("\\s+"))
+//        if (parts.size < 5) return null
+//        val body = line.substringAfter(parts[4]).trim()
+//        return LogLine("${parts[0]} ${parts[1]}", body.substringBefore(":").trim(), body.substringAfter(":").trim(), LogLevel.INFO)
+//    }
     private fun parseLogLine(line: String): LogLine? {
         val parts = line.trim().split(Regex("\\s+"))
         if (parts.size < 5) return null
+
+        // parts[4] がログレベル ("V", "D", "I", "W", "E", "F" など)
+        val levelChar = parts[4]
+        val parsedLevel = when (levelChar) {
+            "D", "V" -> LogLevel.DEBUG
+            "W" -> LogLevel.WARN
+            "E", "F" -> LogLevel.ERROR
+            else -> LogLevel.INFO
+        }
+
         val body = line.substringAfter(parts[4]).trim()
-        return LogLine("${parts[0]} ${parts[1]}", body.substringBefore(":").trim(), body.substringAfter(":").trim(), LogLevel.INFO)
+        val tag = body.substringBefore(":").trim()
+        val message = body.substringAfter(":").trim()
+
+        return LogLine(
+            timestamp = "${parts[0]} ${parts[1]}",
+            tag = tag,
+            message = message,
+            level = parsedLevel // ハードコーディングを修正
+        )
     }
     private fun writeRawLogcatToFile(line: String) {
         viewModelScope.launch(Dispatchers.IO) { try { RAW_LOGCAT_FILE.appendText(line + "\n") } catch (e: IOException) {} }

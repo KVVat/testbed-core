@@ -43,10 +43,20 @@ import androidx.compose.ui.text.AnnotatedString
 fun App() {
     val viewModel: AppViewModel = viewModel { AppViewModel() }
     val logLines = remember { mutableStateListOf<LogLine>() }
+    var showSettingsDialog by remember { mutableStateOf(false) }
+    val appSettings by viewModel.appSettings.collectAsState() // ★設定を監視
 
     LaunchedEffect(viewModel) {
+
+        if (viewModel.appSettings.value.autoOpenLogcat) {
+            viewModel.openLogcatWindow()
+        }
         viewModel.logFlow.collect { log ->
+
             logLines.add(log)
+            if (logLines.size > 2000) {
+                logLines.removeRange(0, logLines.size - 2000)
+            }
         }
     }
 
@@ -106,13 +116,23 @@ fun App() {
                             },
                             onFileExplorerClick = { },
                             onFlashClick = { file: File -> /* viewModel.batchFlashBootImage(file) */ },
-                            onClearDataClick = { viewModel.clearAppData() }
+                            onClearDataClick = { viewModel.clearAppData() },
+                            onSettingsClick = { showSettingsDialog = true }
                         )
                     }
                 }
             )
         }
-
+        if (showSettingsDialog) {
+            SettingsDialog(
+                currentSettings = appSettings,
+                onDismiss = { showSettingsDialog = false },
+                onSave = { newSettings ->
+                    viewModel.saveSettings(newSettings)
+                    showSettingsDialog = false
+                }
+            )
+        }
         if (isLogcatWindowOpen) {
             LogcatWindow(viewModel = viewModel, onCloseRequest = { viewModel.closeLogcatWindow() })
         }
@@ -372,7 +392,13 @@ fun LogLineItem(log: LogLine) {
 }
 
 @Composable
-fun UtilitySideBar(onLogcatClick: (Boolean) -> Unit, onFileExplorerClick: () -> Unit, onFlashClick: (File) -> Unit, onClearDataClick: () -> Unit) {
+fun UtilitySideBar(
+    onLogcatClick: (Boolean) -> Unit,
+    onFileExplorerClick: () -> Unit,
+    onFlashClick: (File) -> Unit,
+    onClearDataClick: () -> Unit,
+    onSettingsClick: () -> Unit
+    ) {
     Column(modifier = Modifier.fillMaxHeight().width(56.dp).background(Color(0xFF2B2D30)).drawWithContent {
         drawContent()
         drawLine(color = Color(0xFF1E1F22), start = Offset(0f, 0f), end = Offset(0f, size.height), strokeWidth = 1.dp.toPx())
@@ -390,7 +416,7 @@ fun UtilitySideBar(onLogcatClick: (Boolean) -> Unit, onFileExplorerClick: () -> 
         Spacer(Modifier.weight(1f))
         UtilityIcon(Icons.Default.DeleteSweep, "Clear App Data") { onClearDataClick() }
         Spacer(Modifier.height(16.dp))
-        UtilityIcon(Icons.Default.Settings, "Settings") {}
+        UtilityIcon(Icons.Default.Settings, "Settings") { onSettingsClick() }
         Spacer(Modifier.height(16.dp))
     }
 }
@@ -430,6 +456,77 @@ fun InputTextDialog(onDismiss: () -> Unit, onSend: (String) -> Unit) {
                 Spacer(Modifier.height(16.dp))
                 Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
                     Button(onClick = { onSend(text) }) { Text("Send") }
+                }
+            }
+        }
+    }
+}
+
+// App.kt に追加
+@Composable
+fun SettingsDialog(
+    currentSettings: AppSettings,
+    onDismiss: () -> Unit,
+    onSave: (AppSettings) -> Unit
+) {
+    // ダイアログ内のローカルステート（キャンセルされたら破棄するため）
+    var autoOpen by remember { mutableStateOf(currentSettings.autoOpenLogcat) }
+    var bufferSizeText by remember { mutableStateOf(currentSettings.logcatBufferSize.toString()) }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = RoundedCornerShape(8.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2D30)),
+            modifier = Modifier.padding(16.dp).width(350.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("Settings", style = MaterialTheme.typography.titleLarge, color = Color.White)
+                Spacer(Modifier.height(16.dp))
+
+                // Logcat自動起動チェックボックス
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = autoOpen,
+                        onCheckedChange = { autoOpen = it },
+                        colors = CheckboxDefaults.colors(checkedColor = Color(0xFF569CD6))
+                    )
+                    Text("Open Logcat window on startup", color = Color.White, fontSize = 14.sp)
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                // バッファサイズ入力（数字のみ許容）
+                OutlinedTextField(
+                    value = bufferSizeText,
+                    onValueChange = { if (it.all { char -> char.isDigit() }) bufferSizeText = it },
+                    label = { Text("Logcat Buffer Size (lines)", color = Color.Gray) },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color(0xFF569CD6),
+                        unfocusedBorderColor = Color.Gray,
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White
+                    ),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(Modifier.height(24.dp))
+
+                // アクションボタン
+                Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                    TextButton(onClick = onDismiss) {
+                        Text("Cancel", color = Color.Gray)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Button(
+                        onClick = {
+                            val newSize = bufferSizeText.toIntOrNull()?.coerceAtLeast(100) ?: 2000
+                            onSave(AppSettings(autoOpen, newSize))
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF569CD6))
+                    ) {
+                        Text("Save")
+                    }
                 }
             }
         }
