@@ -9,6 +9,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.LocalTextSelectionColors
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material.icons.Icons
@@ -33,7 +36,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 import java.io.File
-
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 @Composable
 @Preview
 fun App() {
@@ -239,10 +243,104 @@ fun TopControlBar(
 
 @Composable
 fun LogConsole(logs: List<LogLine>, modifier: Modifier = Modifier) {
+    // 状態管理
+    var filterText by remember { mutableStateOf("") }
+    var isPaused by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
-    LaunchedEffect(logs.size) { if (logs.isNotEmpty()) listState.animateScrollToItem(logs.size - 1) }
-    Column(modifier = modifier.background(Color(0xFF1E1F22)).padding(8.dp)) {
-        LazyColumn(state = listState) { items(logs) { LogLineItem(it) } }
+    val clipboardManager = LocalClipboardManager.current
+
+    // フィルタリングロジック (message または tag にヒットするもの)
+    val filteredLogs = remember(logs, filterText) {
+        if (filterText.isBlank()) logs
+        else logs.filter {
+            it.message.contains(filterText, ignoreCase = true) ||
+                    it.tag.contains(filterText, ignoreCase = true)
+        }
+    }
+
+    // 自動スクロール (Pausedでなく、かつフィルタ中でない場合のみ)
+    LaunchedEffect(logs.size) {
+        if (!isPaused && filterText.isEmpty() && logs.isNotEmpty()) {
+            listState.scrollToItem(logs.size - 1)
+        }
+    }
+
+    Column(modifier = modifier.background(Color(0xFF1E1F22))) {
+        // --- ツールバー (フィルタ & 操作ボタン) ---
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF3C3F41))
+                .padding(4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // フィルタ入力欄
+            OutlinedTextField(
+                value = filterText,
+                onValueChange = { filterText = it },
+                placeholder = { Text("Filter (grep)...", color = Color.Gray) },
+                modifier = Modifier.weight(1f).height(50.dp),
+                textStyle = LocalTextStyle.current.copy(fontSize = 13.sp, color = Color.White),
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Color(0xFF569CD6),
+                    unfocusedBorderColor = Color.Gray,
+                    cursorColor = Color.White,
+                    // 文字色もここで指定するのが Material 3 の推奨です
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White
+                ),
+                trailingIcon = {
+                    if (filterText.isNotEmpty()) {
+                        IconButton(onClick = { filterText = "" }) {
+                            Icon(Icons.Default.Close, "Clear", tint = Color.Gray)
+                        }
+                    }
+                }
+            )
+
+            Spacer(Modifier.width(8.dp))
+
+            // 一時停止ボタン (自動スクロール防止)
+            IconButton(onClick = { isPaused = !isPaused }) {
+                Icon(
+                    if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                    contentDescription = if (isPaused) "Resume Scroll" else "Pause Scroll",
+                    tint = if (isPaused) Color(0xFFFFC66D) else Color.Gray // 停止中は黄色で警告
+                )
+            }
+
+            // コピーボタン (表示中のログを全てコピー)
+            IconButton(onClick = {
+                val textToCopy = filteredLogs.joinToString("\n") {
+                    "${it.timestamp} ${it.level} [${it.tag}] ${it.message}"
+                }
+                clipboardManager.setText(AnnotatedString(textToCopy))
+            }) {
+                Icon(Icons.Default.ContentCopy, "Copy Logs", tint = Color.Gray)
+            }
+        }
+
+        // --- ログリスト ---
+        // SelectionContainerで囲むと、マウスドラッグでの個別選択も可能になります
+        // (行数が多いと重くなる場合があるので、動作が重ければ外してください)
+        val selectionColor = TextSelectionColors(
+            handleColor = Color(0xFF569CD6),
+            backgroundColor = Color(0xFF264F78)
+        )
+
+        CompositionLocalProvider(LocalTextSelectionColors provides selectionColor) {
+            SelectionContainer {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp)
+                ) {
+                    items(filteredLogs) { log ->
+                        LogLineItem(log)
+                    }
+                }
+            }
+        }
     }
 }
 
