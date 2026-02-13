@@ -61,14 +61,18 @@ fun App() {
                 // 2. Drawer の中身（詳細が見れるテスト一覧）
                 ModalDrawerSheet(
                     drawerContainerColor = Color(0xFF2B2D30),
-                    modifier = Modifier.width(300.dp)
+                    modifier = Modifier.width(480.dp)
                 ) {
                     TestListDrawerContent(
                         testPlugins = viewModel.testPlugins,
                         onRunTest = { plugin ->
                             viewModel.runTest(plugin)
                             scope.launch { drawerState.close() }
+                        },
+                        onCloseRequest = {
+                            scope.launch { drawerState.close() }
                         }
+
                     )
                 }
             }
@@ -113,12 +117,30 @@ fun App() {
 @Composable
 fun TestListDrawerContent(
     testPlugins: List<TestPlugin>,
-    onRunTest: (TestPlugin) -> Unit
+    onRunTest: (TestPlugin) -> Unit,
+    onCloseRequest: () -> Unit // ← これを追加（×ボタンや項目選択時に呼ぶ）
 ) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Text("Available Tests", style = MaterialTheme.typography.bodySmall, color = Color.White)
-        Spacer(Modifier.height(16.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween, // 端に寄せる
+            verticalAlignment = Alignment.CenterVertically,
 
+        ) {
+            Text(
+                text = "Test Selector",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            // ×ボタン
+            IconButton(onClick = onCloseRequest) {
+                Icon(Icons.Default.Close, contentDescription = "Close Menu",tint = MaterialTheme.colorScheme.onSurface)
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        HorizontalDivider()
+        Spacer(Modifier.height(16.dp))
         LazyColumn {
             items(testPlugins) { plugin ->
                 NavigationDrawerItem(
@@ -163,51 +185,15 @@ fun TopControlBar(
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // ハンバーガーアイコン
+
                     IconButton(onClick = onMenuClick, enabled = !isRunning) {
                         Icon(Icons.Default.Menu, contentDescription = "Open Test Menu")
                     }
                     Text("Test Explorer", fontSize = 16.sp)
                     // ...
                 }
-                /*
-                var testMenuExpanded by remember { mutableStateOf(false) }
-                Box {
-                    TextButton(
-                        onClick = { testMenuExpanded = true },
-                        enabled = !isRunning,
-                        colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
-                    ) {
-                        Icon(Icons.Default.PlayArrow, null, tint = if (isRunning) Color.Gray else Color(0xFF6A8759))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Tests", fontSize = 14.sp)
-                        Icon(Icons.Default.ArrowDropDown, null)
-                    }
-                    DropdownMenu(
-                        expanded = testMenuExpanded,
-                        onDismissRequest = { testMenuExpanded = false },
-                        modifier = Modifier.background(Color(0xFF2B2D30))
-                    ) {
-                        if (testPlugins.isEmpty()) {
-                            DropdownMenuItem(onClick = {}) {
-                                Text("No Plugins Loaded", color = Color.Gray, fontSize = 12.sp)
-                            }
-                        }
-                        testPlugins.forEach { plugin ->
-                            DropdownMenuItem(onClick = {
-                                testMenuExpanded = false
-                                onRunTest(plugin)
-                            }) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Science, null, modifier = Modifier.size(16.dp), tint = Color.LightGray)
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(plugin.name, color = Color.White, fontSize = 13.sp)
-                                }
-                            }
-                        }
-                    }
-                }*/
-                // --- INSERT START ---
+
+
                 Spacer(Modifier.width(4.dp))
                 IconButton(
                     onClick = onRefreshPlugins,
@@ -219,7 +205,7 @@ fun TopControlBar(
                         tint = if (isRunning) Color.Gray else Color(0xFFCCCCCC)
                     )
                 }
-                // --- INSERT END ---
+
                 Spacer(Modifier.width(12.dp))
                 Divider(Modifier.height(24.dp).width(1.dp), color = Color.Gray)
                 Spacer(Modifier.width(12.dp))
