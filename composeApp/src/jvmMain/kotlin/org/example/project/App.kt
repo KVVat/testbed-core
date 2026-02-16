@@ -186,6 +186,10 @@ fun TestListDrawerContent(
 }
 
 
+// composeApp/src/jvmMain/kotlin/org/example/project/App.kt
+
+// ... imports ...
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TopControlBar(
@@ -193,7 +197,7 @@ fun TopControlBar(
     isRunning: Boolean,
     testPlugins: List<TestPlugin>,
     onRunTest: (TestPlugin) -> Unit,
-    onRefreshPlugins: () -> Unit, // <--- New Parameter
+    onRefreshPlugins: () -> Unit,
     onBackClick: () -> Unit,
     onHomeClick: () -> Unit,
     onSendText: (String) -> Unit,
@@ -202,40 +206,43 @@ fun TopControlBar(
 ) {
     TopAppBar(
         colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = Color(0xFF2B2D30), // backgroundColor の代わり
-            titleContentColor = Color.White,    // contentColor の代わり
+            containerColor = Color(0xFF2B2D30),
+            titleContentColor = Color.White,
             actionIconContentColor = Color.White
         ),
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                // 左側: Menu Button
+                TooltipIconButton(
+                    icon = Icons.Default.Menu,
+                    tooltip = "Open Test Menu",
+                    tint = Color.White,
+                    enabled = !isRunning, // ★実行中は無効化
+                    onClick = onMenuClick
+                )
 
-                    IconButton(onClick = onMenuClick, enabled = !isRunning) {
-                        Icon(Icons.Default.Menu, contentDescription = "Open Test Menu")
-                    }
-                    Text("Test Explorer", fontSize = 16.sp)
-                    // ...
-                }
-
+                Text("Test Explorer", fontSize = 16.sp, modifier = Modifier.padding(start = 8.dp))
 
                 Spacer(Modifier.width(4.dp))
-                IconButton(
-                    onClick = onRefreshPlugins,
-                    enabled = !isRunning
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = "Reload Plugins",
-                        tint = if (isRunning) Color.Gray else Color(0xFFCCCCCC)
-                    )
-                }
+
+                // 左側: Refresh Button
+                TooltipIconButton(
+                    icon = Icons.Default.Refresh,
+                    tooltip = "Reload Plugins",
+                    // 実行中はグレー、通常時は明るいグレー
+                    tint = if (isRunning) Color.Gray else Color(0xFFCCCCCC),
+                    enabled = !isRunning,
+                    onClick = onRefreshPlugins
+                )
 
                 Spacer(Modifier.width(12.dp))
+                // ... (セパレータや端末ステータス表示はそのまま) ...
                 Divider(Modifier.height(24.dp).width(1.dp), color = Color.Gray)
                 Spacer(Modifier.width(12.dp))
                 Icon(Icons.Default.PhoneAndroid, null, tint = if (adbConnected) Color(0xFF6B9F78) else Color.Gray, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
                 Text(text = if (adbConnected) "Pixel 8 (Active)" else "Disconnected", fontSize = 13.sp, color = Color.LightGray)
+
                 if (isRunning) {
                     Spacer(Modifier.width(16.dp))
                     CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = Color(0xFF569CD6))
@@ -243,13 +250,42 @@ fun TopControlBar(
             }
         },
         actions = {
-            IconButton(onClick = onBackClick) { Icon(Icons.Default.ArrowBack, "Back") }
-            IconButton(onClick = onHomeClick) { Icon(Icons.Default.Home, "Home") }
+            // 右側: Back
+            TooltipIconButton(
+                icon = Icons.Default.ArrowBack,
+                tooltip = "Back",
+                tint = Color.White,
+                onClick = onBackClick
+            )
+
+            // 右側: Home
+            TooltipIconButton(
+                icon = Icons.Default.Home,
+                tooltip = "Home",
+                tint = Color.White,
+                onClick = onHomeClick
+            )
+
             Divider(Modifier.height(24.dp).width(1.dp).padding(horizontal = 8.dp), color = Color.Gray)
+
+            // 右側: Input Text
             var showInputTextDialog by remember { mutableStateOf(false) }
-            IconButton(onClick = { showInputTextDialog = true }) { Icon(Icons.Default.Keyboard, "Input Text") }
+            TooltipIconButton(
+                icon = Icons.Default.Keyboard,
+                tooltip = "Input Text",
+                tint = Color.White,
+                onClick = { showInputTextDialog = true }
+            )
+
             Divider(Modifier.height(24.dp).width(1.dp).padding(horizontal = 8.dp), color = Color.Gray)
-            IconButton(onClick = onScreenshotClick) { Icon(Icons.Default.CameraAlt, "Screenshot") }
+
+            // 右側: Screenshot
+            TooltipIconButton(
+                icon = Icons.Default.CameraAlt,
+                tooltip = "Take Screenshot",
+                tint = Color.White,
+                onClick = onScreenshotClick
+            )
 
             if (showInputTextDialog) {
                 InputTextDialog(
@@ -405,25 +441,20 @@ fun UtilitySideBar(
     }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Top) {
         Spacer(Modifier.height(16.dp))
         var isLogcatRunning by remember { mutableStateOf(false) }
-        UtilityIcon(icon = if (isLogcatRunning) Icons.Default.Visibility else Icons.Default.VisibilityOff, tooltip = "Logcat Monitor") {
+        TooltipIconButton(icon = if (isLogcatRunning) Icons.Default.Visibility else Icons.Default.VisibilityOff, tooltip = "Logcat Monitor") {
             isLogcatRunning = !isLogcatRunning
             onLogcatClick(isLogcatRunning)
         }
         Spacer(Modifier.height(24.dp))
-        UtilityIcon(Icons.Default.Folder, "File Explorer") { onFileExplorerClick() }
+        TooltipIconButton(Icons.Default.Folder, "File Explorer") { onFileExplorerClick() }
         Spacer(Modifier.height(24.dp))
-        UtilityIcon(Icons.Default.FlashOn, "Batch Flash") { onFlashClick(File("boot.img")) }
+        TooltipIconButton(Icons.Default.FlashOn, "Batch Flash") { onFlashClick(File("boot.img")) }
         Spacer(Modifier.weight(1f))
-        UtilityIcon(Icons.Default.DeleteSweep, "Clear App Data") { onClearDataClick() }
+        TooltipIconButton(Icons.Default.DeleteSweep, "Clear App Data") { onClearDataClick() }
         Spacer(Modifier.height(16.dp))
-        UtilityIcon(Icons.Default.Settings, "Settings") { onSettingsClick() }
+        TooltipIconButton(Icons.Default.Settings, "Settings") { onSettingsClick() }
         Spacer(Modifier.height(16.dp))
     }
-}
-
-@Composable
-fun UtilityIcon(icon: ImageVector, tooltip: String, onClick: () -> Unit) {
-    IconButton(onClick = onClick) { Icon(icon, contentDescription = tooltip, tint = Color.Gray) }
 }
 
 @Composable

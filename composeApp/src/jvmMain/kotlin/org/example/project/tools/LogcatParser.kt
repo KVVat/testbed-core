@@ -21,6 +21,7 @@ object LogcatParser {
         if (!matcher.matches()) return null
 
         val timestamp = matcher.group(1)
+        val pid = matcher.group(2)
         val levelChar = matcher.group(4)
         val tag = matcher.group(5).trim()
 
@@ -33,25 +34,8 @@ object LogcatParser {
             "E", "F" -> LogLevel.ERROR
             else -> LogLevel.INFO
         }
+        val pkgName = ProcessNameResolver.getPackageName(pid)
 
-        return LogLine(timestamp, tag, message, level)
-    }/*
-    fun parse(line: String): LogLine? {
-        val parts = line.trim().split(Regex("\\s+"))
-        if (parts.size < 5) return null
-
-        val levelChar = parts[4]
-        val parsedLevel = when (levelChar) {
-            "D", "V" -> LogLevel.DEBUG
-            "W" -> LogLevel.WARN
-            "E", "F" -> LogLevel.ERROR
-            else -> LogLevel.INFO
-        }
-
-        val body = line.substringAfter(parts[4]).trim()
-        val tag = body.substringBefore(":").trim()
-        val message = body.substringAfter(":").trim()
-
-        return LogLine("${parts[0]} ${parts[1]}", tag, message, parsedLevel)
-    }*/
+        return LogLine(timestamp, tag, message, level,pid,pkgName)
+    }
 }

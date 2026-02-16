@@ -26,6 +26,7 @@ import java.util.Properties
 import org.example.project.junit.xmlreport.AntXmlRunListener
 import org.example.project.junit.JUnitTestRunner
 import org.example.project.tools.LogcatParser
+import org.example.project.tools.ProcessNameResolver
 
 
 data class TestPlugin(
@@ -355,7 +356,7 @@ class AppViewModel : ViewModel() {
 
         // 3. それ以外（メッセージ本文、スタックトレース等）
         pendingLogLine?.let { current ->
-            // 既存のメッセージに追記（改行を入れる）
+            ProcessNameResolver.updateFromLog(current.tag, rawLine)
             val newMessage = if (current.message.isEmpty()) rawLine else "${current.message}\n$rawLine"
             pendingLogLine = current.copy(message = newMessage)
         }
@@ -382,40 +383,6 @@ class AppViewModel : ViewModel() {
         flushPendingLog()
     }
 
-//    fun onLogcatReceived(rawLine: String) {
-//        writeRawLogcatToFile(rawLine)
-//        val parsedLog = LogcatParser.parse(rawLine) ?: LogLine("", "RAW", rawLine, LogLevel.INFO)
-//        _logcatLines.add(parsedLog)
-//        val limit = appSettings.value.logcatBufferSize
-//        if (_logcatLines.size > limit) {
-//            _logcatLines.removeRange(0, _logcatLines.size - MAX_LOG_LINES)
-//        }
-//    }
-
-//    private fun parseLogLine(line: String): LogLine? {
-//        val parts = line.trim().split(Regex("\\s+"))
-//        if (parts.size < 5) return null
-//
-//        // parts[4] がログレベル ("V", "D", "I", "W", "E", "F" など)
-//        val levelChar = parts[4]
-//        val parsedLevel = when (levelChar) {
-//            "D", "V" -> LogLevel.DEBUG
-//            "W" -> LogLevel.WARN
-//            "E", "F" -> LogLevel.ERROR
-//            else -> LogLevel.INFO
-//        }
-//
-//        val body = line.substringAfter(parts[4]).trim()
-//        val tag = body.substringBefore(":").trim()
-//        val message = body.substringAfter(":").trim()
-//
-//        return LogLine(
-//            timestamp = "${parts[0]} ${parts[1]}",
-//            tag = tag,
-//            message = message,
-//            level = parsedLevel // ハードコーディングを修正
-//        )
-//    }
     private fun writeRawLogcatToFile(line: String) {
         viewModelScope.launch(Dispatchers.IO) { try { RAW_LOGCAT_FILE.appendText(line + "\n") } catch (e: IOException) {} }
     }

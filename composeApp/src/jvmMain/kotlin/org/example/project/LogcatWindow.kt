@@ -1,5 +1,8 @@
 package org.example.project
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.TooltipArea
 import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -21,6 +24,7 @@ import androidx.compose.material.icons.outlined.ViewList
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -29,8 +33,10 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Window
@@ -48,7 +54,7 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
     var isPaused by remember { mutableStateOf(false) }
     var expandedLevelMenu by remember { mutableStateOf(false) }
     val selectedLevels = remember { mutableStateListOf(*LogLevel.values()) }
-
+    var isSoftWrap by remember { mutableStateOf(true) }
     val clipboardManager = LocalClipboardManager.current
     val listState = rememberLazyListState()
 
@@ -87,7 +93,7 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
                     Spacer(Modifier.height(16.dp))
 
                     // 1. Play/Pause
-                    SideBarIconButton(
+                    TooltipIconButton(
                         icon = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
                         tooltip = if (isPaused) "Resume" else "Pause",
                         tint = if (isPaused) Color(0xFFFFC66D) else Color.White,
@@ -97,15 +103,23 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
                     Spacer(Modifier.height(16.dp))
 
                     // 2. Clear
-                    SideBarIconButton(
+                    TooltipIconButton(
                         icon = Icons.Default.DeleteSweep,
                         tooltip = "Clear Log",
                         onClick = { viewModel.clearLogcat() }
                     )
-
+                    Spacer(Modifier.height(16.dp))
+                    TooltipIconButton(
+                        // アイコンは「行」をイメージさせる Notes などを採用
+                        icon = Icons.Default.Notes,
+                        tooltip = if (isSoftWrap) "Disable Word Wrap" else "Enable Word Wrap",
+                        // ONのときは青色などで強調
+                        tint = if (isSoftWrap) Color(0xFF569CD6) else Color.White,
+                        onClick = { isSoftWrap = !isSoftWrap }
+                    )
                     Spacer(Modifier.height(16.dp))
 
-                    SideBarIconButton(
+                    TooltipIconButton(
                         // ★ アイコンを変更 (Defaultにある確実なものへ)
                         icon = if (isCompactMode) Icons.Default.ViewHeadline else Icons.Default.ViewList,
                         tooltip = if (isCompactMode) "Standard View" else "Compact View",
@@ -116,7 +130,7 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
                     Spacer(Modifier.weight(1f)) // 下詰め
 
                     // 4. Settings (Placeholder)
-                    SideBarIconButton(
+                    TooltipIconButton(
                         icon = Icons.Default.Settings,
                         tooltip = "Settings",
                         onClick = { /* Open Settings */ }
@@ -160,9 +174,9 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
                                 ) {
                                     items(filteredLogs) { log ->
                                         if (isCompactMode) {
-                                            CompactLogItem(log)
+                                            CompactLogItem(log,isSoftWrap)
                                         } else {
-                                            StandardLogItem(log)
+                                            StandardLogItem(log, isSoftWrap)
                                         }
                                         Divider(color = Color(0xFF2B2D30), thickness = 0.5.dp)
                                     }
@@ -190,23 +204,6 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
 // --- コンポーネント定義 ---
 
 @Composable
-fun SideBarIconButton(
-    icon: ImageVector,
-    tooltip: String,
-    tint: Color = Color.White,
-    onClick: () -> Unit
-) {
-    IconButton(onClick = onClick) {
-        Icon(
-            imageVector = icon,
-            contentDescription = tooltip,
-            tint = tint,
-            modifier = Modifier.size(24.dp)
-        )
-    }
-}
-
-@Composable
 fun LogcatTopBar(
     filterText: String,
     onFilterChange: (String) -> Unit,
@@ -223,12 +220,26 @@ fun LogcatTopBar(
             .padding(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        /*
+        onValueChange = { filterText = it },
+        placeholder = { Text("Filter (grep)...", color = Color.Gray) },
+        modifier = Modifier.weight(1f).height(50.dp),
+        textStyle = LocalTextStyle.current.copy(fontSize = 13.sp, color = Color.White),
+        singleLine = true,
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = Color(0xFF569CD6),
+            unfocusedBorderColor = Color.Gray,
+            cursorColor = Color.White,
+            // 文字色もここで指定するのが Material 3 の推奨です
+            focusedTextColor = Color.White,
+            unfocusedTextColor = Color.White
+        ),*/
         // Filter TextField
         OutlinedTextField(
             value = filterText,
             onValueChange = onFilterChange,
             placeholder = { Text("Filter (tag, msg)...", color = Color.Gray, fontSize = 12.sp) },
-            modifier = Modifier.weight(1f).height(40.dp),
+            modifier = Modifier.weight(1f).height(60.dp),
             textStyle = LocalTextStyle.current.copy(fontSize = 13.sp, color = Color.White),
             singleLine = true,
             colors = OutlinedTextFieldDefaults.colors(
@@ -296,7 +307,7 @@ fun LogcatTopBar(
 
 
 @Composable
-fun StandardLogItem(log :LogLine){
+fun StandardLogItem(log :LogLine,isSoftWrap:Boolean){
     val levelColor = when (log.level) {
         LogLevel.DEBUG -> Color(0xFF299999) // Cyan-ish
         LogLevel.INFO -> Color(0xFFBBBBBB)  // Light Gray
@@ -315,7 +326,18 @@ fun StandardLogItem(log :LogLine){
             }
         }
         Spacer(modifier = Modifier.width(8.dp))
-        Text(text = "${log.timestamp} [${log.tag}] ${log.message}", color = levelColor, fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 18.sp)
+        Text(text = buildAnnotatedString {
+                append("${log.timestamp}  ")
+                append(log.pid)
+                // ★パッケージ名が判明していれば表示
+                log.packageName?.let { pkg ->
+                    append(" ($pkg)")
+                }
+                append(" ${log.tag}")
+                append(" ${log.message}")
+            },
+            color = levelColor, fontFamily = FontFamily.Monospace, fontSize = 13.sp,
+            lineHeight = 18.sp, softWrap = isSoftWrap)
     }
 }
 @Composable
@@ -364,7 +386,7 @@ fun StandardLogItem_(log: LogLine) {
     }
 }
 @Composable
-fun CompactLogItem(log: LogLine) {
+fun CompactLogItem(log: LogLine,isSoftWrap:Boolean) {
     val levelColor = when (log.level) {
         LogLevel.DEBUG -> Color(0xFF299999)
         LogLevel.INFO -> Color(0xFFBBBBBB)
@@ -410,8 +432,9 @@ fun CompactLogItem(log: LogLine) {
             fontFamily = FontFamily.Monospace,
             fontSize = 13.sp,
             lineHeight = 18.sp,
-            maxLines = 1, // ★1行制限
+            //maxLines = 1, // ★1行制限
             overflow = TextOverflow.Ellipsis, // ★あふれたら "..."
+            softWrap = isSoftWrap,
             modifier = Modifier
                 .weight(1f)
                 .align(Alignment.CenterVertically)

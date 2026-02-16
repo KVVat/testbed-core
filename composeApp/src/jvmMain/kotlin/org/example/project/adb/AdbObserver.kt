@@ -24,6 +24,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.flow.receiveAsFlow
+import org.example.project.tools.ProcessNameResolver
 
 class AdbObserver(private val viewModel: AppViewModel) {
 
@@ -182,7 +183,31 @@ class AdbObserver(private val viewModel: AppViewModel) {
         }
     }
 
+    private suspend fun fetchProcessList() {
+        try {
+            val result = adb.adb.execute(
+                ShellCommandRequest("ps -A -o PID,NAME"),
+                adb.deviceSerial
+            )
+            val map = mutableMapOf<String, String>()
+            result.output.lines().forEach { line ->
+                val parts = line.trim().split(Regex("\\s+"))
+                if (parts.size >= 2 && parts[0].all { it.isDigit() }) {
+                    // parts[0] = PID, parts[1] = NAME
+                    map[parts[0]] = parts[1]
+                }
+            }
+            ProcessNameResolver.updateBulk(map)
+        }catch (e: Exception){
+            viewModel.log("ADB", "Failed to fetch process list: ${e.message}", LogLevel.WARN)
+        }
+    }
     suspend fun startLogcat() {
+
+        ProcessNameResolver.clear()//Remove old process list
+
+        fetchProcessList()
+
         val serial = adb.deviceSerial
         if (!viewModel.uiState.value.adbIsValid || serial.isBlank()) return
         if (logcatJob?.isActive == true) return

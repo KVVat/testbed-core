@@ -6,7 +6,9 @@ data class LogLine(
     val timestamp: String,
     val tag: String,
     val message: String,
-    val level: LogLevel
+    val level: LogLevel,
+    val pid: String = "", // ★追加
+    val packageName: String? = null
 )
 
 enum class LogLevel {
