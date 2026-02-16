@@ -23,6 +23,7 @@ import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.flow.receiveAsFlow
 
 class AdbObserver(private val viewModel: AppViewModel) {
 
@@ -189,10 +190,11 @@ class AdbObserver(private val viewModel: AppViewModel) {
             val buffer = StringBuilder()
             try {
                 val logChannel: ReceiveChannel<String> = adb.adb.execute(
-                    request = ChanneledLogcatRequest(modes = listOf(LogcatReadMode.threadtime)),
+                    request = ChanneledLogcatRequest(modes = listOf(LogcatReadMode.long)),
                     serial = serial,
                     scope = this
                 )
+                //logChannel.
                 logChannel.consumeEach { chunk ->
                     buffer.append(chunk)
                     while (buffer.contains("\n")) {
@@ -207,6 +209,7 @@ class AdbObserver(private val viewModel: AppViewModel) {
                     viewModel.log("Logcat", "Stream error: ${e.message}", LogLevel.ERROR)
                 }
             } finally {
+                viewModel.flushLogcatBuffer() // ※ViewModelにpublicなflushメソッドを追加して呼ぶ
                 buffer.clear()
             }
         }
