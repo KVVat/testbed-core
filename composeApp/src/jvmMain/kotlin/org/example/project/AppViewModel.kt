@@ -25,6 +25,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Properties
 import org.example.project.junit.xmlreport.AntXmlRunListener
 import org.example.project.junit.JUnitTestRunner
+import org.example.project.tools.LogRecorder
 import org.example.project.tools.LogcatParser
 import org.example.project.tools.ProcessNameResolver
 
@@ -64,7 +65,8 @@ class AppViewModel : ViewModel() {
     private val adbObserver = AdbObserver(this)
     private val fastbootClient = FastbootClient()
 
-    private val RAW_LOGCAT_FILE = File("raw_logcat_output.log")
+    //private val RAW_LOGCAT_FILE = File("raw_logcat_output.log")
+    private val logRecorder = LogRecorder(baseFileName = "logcat.log")
     private val PLUGINS_DIR = File("plugins")
 
     private val SETTINGS_FILE = File("app_settings.properties")
@@ -75,7 +77,7 @@ class AppViewModel : ViewModel() {
         loadSettings()
         startAdbObservation()
         JUnitBridge.logging = { message, level ->
-            val internalLevel = when(level) {
+            val internalLevel = when (level) {
                 TestLogLevel.DEBUG -> LogLevel.DEBUG
                 TestLogLevel.INFO -> LogLevel.INFO
                 TestLogLevel.PASS -> LogLevel.PASS
@@ -100,7 +102,8 @@ class AppViewModel : ViewModel() {
                 val props = Properties().apply { load(SETTINGS_FILE.inputStream()) }
                 _appSettings.value = AppSettings(
                     autoOpenLogcat = props.getProperty("autoOpenLogcat", "true").toBoolean(),
-                    logcatBufferSize = props.getProperty("logcatBufferSize", "2000").toIntOrNull() ?: 2000
+                    logcatBufferSize = props.getProperty("logcatBufferSize", "2000").toIntOrNull()
+                        ?: 2000
                 )
             } catch (e: Exception) {
                 log("SYSTEM", "Failed to load settings: ${e.message}", LogLevel.ERROR)
@@ -121,6 +124,7 @@ class AppViewModel : ViewModel() {
             log("SYSTEM", "Failed to save settings: ${e.message}", LogLevel.ERROR)
         }
     }
+
     /**
      * pluginsディレクトリ内のJARファイルをスキャンし、テストクラスをロードします。
      */
@@ -147,7 +151,8 @@ class AppViewModel : ViewModel() {
             jarFiles.forEach { jarFile ->
                 try {
                     // JARごとにURLClassLoaderを作成
-                    val loader = URLClassLoader(arrayOf(jarFile.toURI().toURL()), this.javaClass.classLoader)
+                    val loader =
+                        URLClassLoader(arrayOf(jarFile.toURI().toURL()), this.javaClass.classLoader)
 
                     JarFile(jarFile).use { jar ->
                         val entries = jar.entries()
@@ -172,13 +177,19 @@ class AppViewModel : ViewModel() {
                                             if (_testPlugins.none { it.clazz == clazz }) {
                                                 // フォルダ名を取得して識別しやすくする
                                                 val parentDirName = jarFile.parentFile.name
-                                                _testPlugins.add(TestPlugin(
-                                                    id = "${parentDirName}_${clazz.simpleName}",
-                                                    name = "[$parentDirName] ${clazz.simpleName}",
-                                                    clazz = clazz,
-                                                    shortName = clazz.simpleName
-                                                ))
-                                                log("SYSTEM", "Plugin loaded: ${clazz.simpleName} (from $parentDirName)", LogLevel.PASS)
+                                                _testPlugins.add(
+                                                    TestPlugin(
+                                                        id = "${parentDirName}_${clazz.simpleName}",
+                                                        name = "[$parentDirName] ${clazz.simpleName}",
+                                                        clazz = clazz,
+                                                        shortName = clazz.simpleName
+                                                    )
+                                                )
+                                                log(
+                                                    "SYSTEM",
+                                                    "Plugin loaded: ${clazz.simpleName} (from $parentDirName)",
+                                                    LogLevel.PASS
+                                                )
                                             }
                                         }
                                     }
@@ -189,7 +200,11 @@ class AppViewModel : ViewModel() {
                         }
                     }
                 } catch (e: Exception) {
-                    log("SYSTEM", "Failed to load JAR [${jarFile.name}]: ${e.message}", LogLevel.ERROR)
+                    log(
+                        "SYSTEM",
+                        "Failed to load JAR [${jarFile.name}]: ${e.message}",
+                        LogLevel.ERROR
+                    )
                 }
             }
         }
@@ -233,7 +248,8 @@ class AppViewModel : ViewModel() {
             toggleIsRunning(true)
             log("TEST", ">>> START: ${plugin.name}", LogLevel.INFO)
 
-            val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
+            val timestamp =
+                LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
             val props = Properties().apply {
                 setProperty("SFR.shortname", plugin.shortName)
             }
@@ -247,7 +263,8 @@ class AppViewModel : ViewModel() {
                     }
                 }
 
-                val reportFile = File(output_path(), "junit-report-${plugin.shortName}-$timestamp.xml")
+                val reportFile =
+                    File(output_path(), "junit-report-${plugin.shortName}-$timestamp.xml")
                 fos = FileOutputStream(reportFile)
                 antRunner.setOutputStream(fos)
 
@@ -267,7 +284,10 @@ class AppViewModel : ViewModel() {
                 log("TEST", "ERROR: ${e.message}", LogLevel.ERROR)
                 toggleIsRunning(false)
             } finally {
-                try { fos?.close() } catch (e: Exception) {}
+                try {
+                    fos?.close()
+                } catch (e: Exception) {
+                }
             }
         }
     }
@@ -280,14 +300,22 @@ class AppViewModel : ViewModel() {
 
     private fun startAdbObservation() {
         viewModelScope.launch {
-            try { adbObserver.observeAdb() } catch (e: Exception) { log("ADB", "Observer error: ${e.message}", LogLevel.ERROR) }
+            try {
+                adbObserver.observeAdb()
+            } catch (e: Exception) {
+                log("ADB", "Observer error: ${e.message}", LogLevel.ERROR)
+            }
         }
     }
 
 
     fun toggleAdbIsValid(isValid: Boolean) {
         _uiState.update { it.copy(adbIsValid = isValid) }
-        log("ADB", "Status: ${if (isValid) "Connected" else "Disconnected"}", if (isValid) LogLevel.PASS else LogLevel.ERROR)
+        log(
+            "ADB",
+            "Status: ${if (isValid) "Connected" else "Disconnected"}",
+            if (isValid) LogLevel.PASS else LogLevel.ERROR
+        )
 
         // ★追加: 接続状態が変わったときのLogcatの自動制御
         if (isValid && _isLogcatWindowOpen.value) {
@@ -326,11 +354,25 @@ class AppViewModel : ViewModel() {
         viewModelScope.launch { _logFlow.emit(LogLine(timestamp, tag, message, level)) }
     }
 
-    fun captureScreenshot() { viewModelScope.launch { adbObserver.captureScreenshot() } }
-    fun sendText(text: String) { viewModelScope.launch { adbObserver.sendText(text) } }
-    fun clearAppData() { viewModelScope.launch { adbObserver.clearAppData("org.example.project") } }
-    fun clearLogcat() { _logcatLines.clear(); viewModelScope.launch { adbObserver.clearLogcatBuffer() } }
-    fun updateLogcatFilter(text: String) { _logcatFilter.value = text }
+    fun captureScreenshot() {
+        viewModelScope.launch { adbObserver.captureScreenshot() }
+    }
+
+    fun sendText(text: String) {
+        viewModelScope.launch { adbObserver.sendText(text) }
+    }
+
+    fun clearAppData() {
+        viewModelScope.launch { adbObserver.clearAppData("org.example.project") }
+    }
+
+    fun clearLogcat() {
+        _logcatLines.clear(); viewModelScope.launch { adbObserver.clearLogcatBuffer() }
+    }
+
+    fun updateLogcatFilter(text: String) {
+        _logcatFilter.value = text
+    }
 
     companion object {
         private const val MAX_LOG_LINES = 2000
@@ -339,7 +381,7 @@ class AppViewModel : ViewModel() {
     private var pendingLogLine: LogLine? = null
 
     fun onLogcatReceived(rawLine: String) {
-        writeRawLogcatToFile(rawLine)
+        //writeRawLogcatToFile(rawLine)
 
         // 1. 新しいヘッダー行が来た場合
         if (LogcatParser.isHeader(rawLine)) {
@@ -357,7 +399,8 @@ class AppViewModel : ViewModel() {
         // 3. それ以外（メッセージ本文、スタックトレース等）
         pendingLogLine?.let { current ->
             ProcessNameResolver.updateFromLog(current.tag, rawLine)
-            val newMessage = if (current.message.isEmpty()) rawLine else "${current.message}\n$rawLine"
+            val newMessage =
+                if (current.message.isEmpty()) rawLine else "${current.message}\n$rawLine"
             pendingLogLine = current.copy(message = newMessage)
         }
     }
@@ -367,7 +410,12 @@ class AppViewModel : ViewModel() {
             // メッセージが空でない場合のみ追加（ヘッダーだけのゴミを防ぐ）
             if (log.message.isNotBlank()) {
                 _logcatLines.add(log)
-
+                // ★追加: 完全に構築された(プロセス名も入った)ログをファイルに記録
+                // IO処理なので、もし重くなるようなら別コルーチン/スレッドに逃がすことも検討
+                // (PrintWriterは内部バッファがあるので通常はこのままで大丈夫です)
+                viewModelScope.launch(Dispatchers.IO) {
+                    logRecorder.write(log)
+                }
                 // バッファ制限
                 val limit = appSettings.value.logcatBufferSize
                 if (_logcatLines.size > limit) {
@@ -382,8 +430,10 @@ class AppViewModel : ViewModel() {
     fun flushLogcatBuffer() {
         flushPendingLog()
     }
-
-    private fun writeRawLogcatToFile(line: String) {
-        viewModelScope.launch(Dispatchers.IO) { try { RAW_LOGCAT_FILE.appendText(line + "\n") } catch (e: IOException) {} }
+    //Call when app closing
+    override fun onCleared() {
+        super.onCleared()
+        logRecorder.close()
     }
+
 }
