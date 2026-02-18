@@ -27,6 +27,95 @@ import androidx.compose.ui.unit.sp
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TooltipIconButton(
+    tooltip: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+    content: @Composable () -> Unit // これにより { Icon(...) } が書けるようになります
+) {
+    if (enabled) {
+        TooltipArea(
+            tooltip = {
+                Surface(
+                    modifier = Modifier.shadow(4.dp),
+                    color = Color(0xFF2B2D30),
+                    shape = RoundedCornerShape(4.dp),
+                    border = BorderStroke(1.dp, Color(0xFF56585A))
+                ) {
+                    Text(
+                        text = tooltip,
+                        color = Color(0xFFE0E0E0),
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            },
+            delayMillis = 500,
+            tooltipPlacement = TooltipPlacement.CursorPoint(
+                alignment = Alignment.BottomEnd,
+                offset = DpOffset(0.dp, 16.dp)
+            )
+        ) {
+            IconButton(onClick = onClick, enabled = enabled) {
+                content()
+            }
+        }
+    } else {
+        IconButton(onClick = onClick, enabled = enabled) {
+            content()
+        }
+    }
+}
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun TooltipIconButton(
+    painter: androidx.compose.ui.graphics.painter.Painter, // Vectorの代わりにPainterを受け取る
+    tooltip: String,
+    tint: Color = Color.Unspecified, // SVGの色を生かすならUnspecified
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    if (enabled) {
+        TooltipArea(
+            tooltip = {
+                Surface(
+                    modifier = Modifier.shadow(4.dp),
+                    color = Color(0xFF2B2D30),
+                    shape = RoundedCornerShape(4.dp),
+                    border = BorderStroke(1.dp, Color(0xFF56585A))
+                ) {
+                    Text(
+                        text = tooltip,
+                        color = Color(0xFFE0E0E0),
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            },
+            delayMillis = 500,
+            tooltipPlacement = TooltipPlacement.CursorPoint(
+                alignment = Alignment.BottomEnd,
+                offset = DpOffset(0.dp, 16.dp)
+            )
+        ) {
+            // ツールチップ対象のボタン
+            IconButton(onClick = onClick, enabled = enabled) {
+                Icon(
+                    painter = painter,
+                    contentDescription = tooltip,
+                    tint = tint,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+        }
+    } else {
+        IconButton(onClick = onClick, enabled = enabled) {
+            Icon(painter = painter, contentDescription = tooltip, tint = tint, modifier = Modifier.size(24.dp))
+        }
+    }
+}
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun TooltipIconButton(
     icon: ImageVector,
     tooltip: String,
     tint: Color = Color.Gray,

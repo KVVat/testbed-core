@@ -38,6 +38,10 @@ import kotlinx.coroutines.launch
 import java.io.File
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import org.jetbrains.compose.resources.painterResource
+import testbed_core.composeapp.generated.resources.Res
+import testbed_core.composeapp.generated.resources.ic_sheep
+
 @Composable
 @Preview
 fun App() {
@@ -104,7 +108,8 @@ fun App() {
                         onHomeClick = { viewModel.pressHome() },
                         onSendText = { text -> viewModel.sendText(text) },
                         onScreenshotClick = { viewModel.captureScreenshot() },
-                        onMenuClick = { scope.launch { drawerState.open() } }
+                        onMenuClick = { scope.launch { drawerState.open() } },
+                        onConnectAgentClick = { viewModel.connectAndPingAgent() }
                     )
                 },
                 content = { padding ->
@@ -202,7 +207,8 @@ fun TopControlBar(
     onHomeClick: () -> Unit,
     onSendText: (String) -> Unit,
     onScreenshotClick: () -> Unit,
-    onMenuClick: () -> Unit
+    onMenuClick: () -> Unit,
+    onConnectAgentClick: () -> Unit
 ) {
     TopAppBar(
         colors = TopAppBarDefaults.topAppBarColors(
@@ -242,7 +248,26 @@ fun TopControlBar(
                 Icon(Icons.Default.PhoneAndroid, null, tint = if (adbConnected) Color(0xFF6B9F78) else Color.Gray, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
                 Text(text = if (adbConnected) "Pixel 8 (Active)" else "Disconnected", fontSize = 13.sp, color = Color.LightGray)
+                Divider(Modifier.height(24.dp).width(1.dp).padding(horizontal = 8.dp), color = Color.Gray)
 
+                // ★追加: 羊（Mutton Agent）接続ボタン
+                TooltipIconButton(
+                    // SVGリソースをロード (ビルド後に Res.drawable.ic_sheep が生成されます)
+                    //icon = null, // painterを使うのでiconはnullまたは無視されるように実装調整が必要ですが、
+                    // TooltipIconButtonがImageVector専用なら、Iconコンポーネントを直接使うか、
+                    // painter対応版を作る必要があります。
+                    // 簡易的にIconでpainterを指定する場合:
+                    onClick = onConnectAgentClick,
+                    tooltip = "Connect Mutton Agent (11451)",
+                    enabled = adbConnected
+                ) {
+                    Icon(
+                        painter = painterResource(Res.drawable.ic_sheep),
+                        contentDescription = "Mutton Agent",
+                        tint = if (adbConnected) Color.White else Color.Gray,// SVG元の色を使う場合
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
                 if (isRunning) {
                     Spacer(Modifier.width(16.dp))
                     CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = Color(0xFF569CD6))

@@ -126,6 +126,17 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
                         tint = if (isCompactMode) Color(0xFF569CD6) else Color.White,
                         onClick = { isCompactMode = !isCompactMode }
                     )
+                    Spacer(Modifier.height(16.dp))
+                    TooltipIconButton(onClick = {
+                        val textToCopy = filteredLogs.joinToString("\n") {log->
+                            "${log.timestamp} ${log.pid}/${log.tag} ${log.level.name}: ${log.message}"
+                        }
+                        clipboardManager.setText(AnnotatedString(textToCopy))
+                        } ,
+                        tooltip =  "Copy Shown Logs",
+                        tint = Color.Gray,
+                        icon = Icons.Default.ContentCopy
+                    )
 
                     Spacer(Modifier.weight(1f)) // 下詰め
 
@@ -135,6 +146,8 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
                         tooltip = "Settings",
                         onClick = { /* Open Settings */ }
                     )
+
+
                     Spacer(Modifier.height(16.dp))
                 }
 
@@ -413,25 +426,24 @@ fun CompactLogItem(log: LogLine,isSoftWrap:Boolean) {
 
         // 時刻のみ: 幅を広げて折り返し防止
         val timeOnly = if (log.timestamp.length > 14) log.timestamp.substring(6,14) else log.timestamp
-        Text(
-            text = timeOnly,
-            color = Color.White,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 13.sp,
-            maxLines = 1, // ★絶対に1行にする
-            overflow = TextOverflow.Visible, // はみ出ても改行しない
-            modifier = Modifier
-                .width(75.dp) // ★ 90.dp -> 100.dp に拡大
-                .align(Alignment.CenterVertically)
-        )
 
+        val annotatedString = buildAnnotatedString {
+            // 1. メタデータ部分 (時刻 PID TAGなど)
+            withStyle(style = SpanStyle(color = Color.White, fontSize = 13.sp, fontFamily = FontFamily.Monospace)) {
+                append("${timeOnly} ")
+            }
+            // 2. 本文メッセージ
+            withStyle(style = SpanStyle(color = levelColor, fontSize = 13.sp, fontFamily = FontFamily.Monospace)) {
+                append(log.message.replace("\n", " "))
+            }
+        }
         // メッセージ
         Text(
-            text = log.message.replace("\n", " "),
+            text = annotatedString,
             color = levelColor,
             fontFamily = FontFamily.Monospace,
             fontSize = 13.sp,
-            lineHeight = 18.sp,
+            lineHeight = 16.sp,
             //maxLines = 1, // ★1行制限
             overflow = TextOverflow.Ellipsis, // ★あふれたら "..."
             softWrap = isSoftWrap,

@@ -436,4 +436,15 @@ class AppViewModel : ViewModel() {
         logRecorder.close()
     }
 
+    fun connectAndPingAgent() {
+        viewModelScope.launch {
+            // 1. デプロイ & 起動 & フォワード
+            adbObserver.setupMuttonAgent()
+            // 2. 少し待ってからPing (プロセス起動待ち)
+            delay(1000)
+            // 3. 導通確認
+            adbObserver.pingMuttonAgent()
+        }
+    }
+
 }
