@@ -101,7 +101,7 @@ class AppViewModel : ViewModel() {
                 val props = Properties().apply { load(SETTINGS_FILE.inputStream()) }
                 _appSettings.value = AppSettings(
                     autoOpenLogcat = props.getProperty("autoOpenLogcat", "true").toBoolean(),
-                    logcatBufferSize = props.getProperty("logcatBufferSize", "2000").toIntOrNull()
+                    logcatBufferSize = props.getProperty("logcatBufferSize", "30000").toIntOrNull()
                         ?: 2000
                 )
             } catch (e: Exception) {
