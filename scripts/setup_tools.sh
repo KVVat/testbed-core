@@ -1,7 +1,5 @@
 #!/bin/bash
-# SDK Platform-Tools 自動インストールスクリプト (macOS/Linux用)
-# Android Studioなしで adb/fastboot を利用可能にします。
-
+# SDK Platform-Tools Auto Install Script
 set -e
 TOOLS_DIR="bin"
 PLATFORM_TOOLS_DIR="$TOOLS_DIR/platform-tools"
@@ -22,8 +20,6 @@ if [ ! -d "$PLATFORM_TOOLS_DIR" ]; then
     unzip -q "$TOOLS_DIR/tools.zip" -d "$TOOLS_DIR/"
     rm "$TOOLS_DIR/tools.zip"
 
-    # --- ライセンス同意の自動化 ---
-    # 特定のハッシュ値を書き込むことで、利用規約同意済みとみなされます
     mkdir -p "$PLATFORM_TOOLS_DIR/licenses"
     echo -e "8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5187479451eabf01fb74380255e2f3ef351d\n24333f8a63b6825ea9c55727f47ce90465ef0ce0" > "$PLATFORM_TOOLS_DIR/licenses/android-sdk-license"
 
