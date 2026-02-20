@@ -65,7 +65,6 @@ class AppViewModel : ViewModel() {
     private val adbObserver = AdbObserver(this)
     private val fastbootClient = FastbootClient()
 
-    //private val RAW_LOGCAT_FILE = File("raw_logcat_output.log")
     private val logRecorder = LogRecorder(baseFileName = "logcat.log")
     private val PLUGINS_DIR = File("plugins")
 
@@ -84,7 +83,7 @@ class AppViewModel : ViewModel() {
                 TestLogLevel.WARN -> LogLevel.WARN
                 TestLogLevel.ERROR -> LogLevel.ERROR
             }
-            // タグは PLUGIN 固定、または動的に取得
+            // The tag is fixed to PLUGIN, or obtained dynamically
             log("PLUGIN", message, internalLevel)
         }
 
@@ -92,7 +91,7 @@ class AppViewModel : ViewModel() {
         JUnitBridge.resourceDir = File(currentDir, "resources").absolutePath
         JUnitBridge.configFilePath = File(currentDir, "config/settings.json").absolutePath
 
-        // 起動時にプラグインディレクトリからJARをロード
+        // Load JARs from the plugin directory on startup
         loadPluginsFromDir()
     }
 
@@ -126,10 +125,10 @@ class AppViewModel : ViewModel() {
     }
 
     /**
-     * pluginsディレクトリ内のJARファイルをスキャンし、テストクラスをロードします。
+     * Scans JAR files in the plugins directory and loads test classes.
      */
     fun loadPluginsFromDir() {
-        // pluginsディレクトリの存在確認と作成
+        // Check for existence of plugins directory and create it
         if (!PLUGINS_DIR.exists()) {
             PLUGINS_DIR.mkdirs()
             log("SYSTEM", "Plugins directory created: ${PLUGINS_DIR.absolutePath}", LogLevel.INFO)
@@ -138,7 +137,7 @@ class AppViewModel : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             log("SYSTEM", "Scanning for plugins in subdirectories...", LogLevel.INFO)
 
-            // walk() を使用してサブディレクトリ内も再帰的に JAR を探索
+            // Use walk() to recursively search for JARs in subdirectories
             val jarFiles = PLUGINS_DIR.walk()
                 .filter { it.isFile && it.extension == "jar" }
                 .toList()
@@ -150,7 +149,7 @@ class AppViewModel : ViewModel() {
 
             jarFiles.forEach { jarFile ->
                 try {
-                    // JARごとにURLClassLoaderを作成
+                    // Create a URLClassLoader for each JAR
                     val loader =
                         URLClassLoader(arrayOf(jarFile.toURI().toURL()), this.javaClass.classLoader)
 
@@ -159,23 +158,23 @@ class AppViewModel : ViewModel() {
                         while (entries.hasMoreElements()) {
                             val entry = entries.nextElement()
 
-                            // クラスファイルであり、かつ無名クラス/内部クラス($)を除外
+                            // Is a class file and excludes anonymous/inner classes ($)
                             if (entry.name.endsWith(".class") && !entry.name.contains("$")) {
                                 val className = entry.name.replace("/", ".").removeSuffix(".class")
 
                                 try {
                                     val clazz = loader.loadClass(className)
 
-                                    // @Test アノテーションが付与されたメソッドの有無を確認
+                                    // Check for methods annotated with @Test
                                     val hasTestAnnotation = clazz.methods.any {
                                         it.isAnnotationPresent(org.junit.Test::class.java)
                                     }
 
                                     if (hasTestAnnotation) {
                                         withContext(Dispatchers.Main) {
-                                            // 重複登録の防止
+                                            // Prevent duplicate registration
                                             if (_testPlugins.none { it.clazz == clazz }) {
-                                                // フォルダ名を取得して識別しやすくする
+                                                // Get the folder name for easy identification
                                                 val parentDirName = jarFile.parentFile.name
                                                 _testPlugins.add(
                                                     TestPlugin(
@@ -194,7 +193,7 @@ class AppViewModel : ViewModel() {
                                         }
                                     }
                                 } catch (e: Throwable) {
-                                    // クラスロード失敗はスキップ
+                                    // Skip class loading failures
                                 }
                             }
                         }
@@ -268,7 +267,7 @@ class AppViewModel : ViewModel() {
                 fos = FileOutputStream(reportFile)
                 antRunner.setOutputStream(fos)
 
-                // クラスローダーを現在のスレッドのコンテキストに設定（JAR内のリソース解決用）
+                // Set the class loader to the current thread's context (for resolving resources in the JAR)
                 val originalClassLoader = Thread.currentThread().contextClassLoader
                 Thread.currentThread().contextClassLoader = plugin.clazz.classLoader
 
@@ -292,7 +291,7 @@ class AppViewModel : ViewModel() {
         }
     }
 
-    // --- 既存のADB/UIロジック（完全に維持） ---
+    // --- Existing ADB/UI logic (keep as is) ---
 
     fun pressHome() = viewModelScope.launch { adbObserver.sendKeyEvent(3) }
     fun pressBack() = viewModelScope.launch { adbObserver.sendKeyEvent(4) }
@@ -317,17 +316,17 @@ class AppViewModel : ViewModel() {
             if (isValid) LogLevel.PASS else LogLevel.ERROR
         )
 
-        // ★追加: 接続状態が変わったときのLogcatの自動制御
+        // Added: Automatic Logcat control when connection status changes
         if (isValid && _isLogcatWindowOpen.value) {
-            startLogcat() // 接続されて、ウィンドウが開いていれば開始
+            startLogcat() // Start if connected and window is open
         } else if (!isValid) {
-            stopLogcat()  // 切断されたら止める
+            stopLogcat()  // Stop if disconnected
         }
     }
 
     fun openLogcatWindow() {
         _isLogcatWindowOpen.value = true
-        // 状態を変えるだけで、ここですぐにstartLogcat()は呼ばない（または安全に呼ぶ）
+        // Just change the state, don't call startLogcat() here immediately (or call it safely)
         startLogcat()
     }
 
@@ -337,7 +336,7 @@ class AppViewModel : ViewModel() {
     }
 
     fun startLogcat() {
-        // ★追加: デバイス未接続の時は ADB コマンドを叩かないようにガードする
+        // Added: Guard against running ADB command when device is not connected
         if (!uiState.value.adbIsValid) {
             log("Logcat", "Waiting for device connection to start logcat...", LogLevel.WARN)
             return
@@ -381,22 +380,21 @@ class AppViewModel : ViewModel() {
     private var pendingLogLine: LogLine? = null
 
     fun onLogcatReceived(rawLine: String) {
-        //writeRawLogcatToFile(rawLine)
 
-        // 1. 新しいヘッダー行が来た場合
+        // 1. When a new header line arrives
         if (LogcatParser.isHeader(rawLine)) {
-            flushPendingLog() // 前のログを確定
+            flushPendingLog() // Flush the previous log
             pendingLogLine = LogcatParser.parseHeader(rawLine)
             return
         }
 
-        // 2. 空行が来た場合（ログの区切り）
+        // 2. When a blank line arrives (log separator)
         if (rawLine.isBlank()) {
-            flushPendingLog() // 区切りなので確定
+            flushPendingLog() // Flush because it's a separator
             return
         }
 
-        // 3. それ以外（メッセージ本文、スタックトレース等）
+        // 3. Others (message body, stack trace, etc.)
         pendingLogLine?.let { current ->
             ProcessNameResolver.updateFromLog(current.tag, rawLine)
             val newMessage =
@@ -407,16 +405,16 @@ class AppViewModel : ViewModel() {
 
     private fun flushPendingLog() {
         pendingLogLine?.let { log ->
-            // メッセージが空でない場合のみ追加（ヘッダーだけのゴミを防ぐ）
+            // Add only if the message is not blank (to prevent garbage with only headers)
             if (log.message.isNotBlank()) {
                 _logcatLines.add(log)
-                // ★追加: 完全に構築された(プロセス名も入った)ログをファイルに記録
-                // IO処理なので、もし重くなるようなら別コルーチン/スレッドに逃がすことも検討
-                // (PrintWriterは内部バッファがあるので通常はこのままで大丈夫です)
+                // Added: Record the fully constructed log (including process name) to a file
+                // Since this is I/O processing, consider moving it to another coroutine/thread if it becomes heavy
+                // (PrintWriter has an internal buffer, so it's usually fine as is)
                 viewModelScope.launch(Dispatchers.IO) {
                     logRecorder.write(log)
                 }
-                // バッファ制限
+                // Buffer limit
                 val limit = appSettings.value.logcatBufferSize
                 if (_logcatLines.size > limit) {
                     _logcatLines.removeRange(0, _logcatLines.size - limit)
@@ -426,7 +424,7 @@ class AppViewModel : ViewModel() {
         pendingLogLine = null
     }
 
-    // デバイス切断時などに強制的に残りを吐き出す用
+    // For forcibly flushing the remainder when the device is disconnected, etc.
     fun flushLogcatBuffer() {
         flushPendingLog()
     }
@@ -438,11 +436,11 @@ class AppViewModel : ViewModel() {
 
     fun connectAndPingAgent() {
         viewModelScope.launch {
-            // 1. デプロイ & 起動 & フォワード
+            // 1. Deploy, start & forward
             adbObserver.setupMuttonAgent()
-            // 2. 少し待ってからPing (プロセス起動待ち)
+            // 2. Wait a bit then Ping (wait for process to start)
             delay(1000)
-            // 3. 導通確認
+            // 3. Check connectivity
             adbObserver.pingMuttonAgent()
         }
     }
