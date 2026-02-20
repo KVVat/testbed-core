@@ -7,59 +7,56 @@ TestBed Core is a **Kotlin Multiplatform Desktop Application** designed for Andr
 ## Key Features
 
 * **Portable Design**: Runs immediately without complex installation. ADB and Fastboot are automatically set up within the tool's directory.
+* **Standalone Execution**: No Java Runtime Environment (JRE) required for end-users. The application comes with a bundled lightweight JRE.
 * **Device Control**: One-click actions for Reboot (System/Bootloader), Screenshots, Text Input, and App Data Clearing.
 * **Logcat Monitor**: Real-time log monitoring with filtering and level selection.
 * **Test Plugin Host**: Load and execute custom JUnit-based test plugins (JARs) dynamically.
 * **Cross-Platform**: Works on Windows, macOS, and Linux.
 
-## Prerequisites
+## Getting Started (For End Users)
 
-* **Java Runtime Environment (JRE) 17** or higher must be installed.
+You do not need to install Android Studio, Android SDK, or even Java. The provided launcher scripts handle the environment setup automatically.
 
-## Getting Started
-
-You do not need to install Android SDK or configure system PATHs manually. This tool handles the environment setup for you.
-
-### 1. Build the Application
-To generate the portable executable JAR (Fat JAR), run the following command in the project root:
-
-**macOS / Linux:**
-```bash
-./gradlew :composeApp:packageUberJarForCurrentOS
-```
-
-**Windows:**
-```cmd
-gradlew.bat :composeApp:packageUberJarForCurrentOS
-```
-
-*The output JAR will be located at:* `composeApp/build/compose/jars/testbed-core-1.0.0.jar`
+### 1. Download
+Download the latest release ZIP file for your operating system (Windows, macOS, or Ubuntu) from the Releases or GitHub Actions Artifacts page and extract it.
 
 ### 2. Run the Tool
-We provide launcher scripts that automatically handle ADB setup and temporary PATH configuration.
+Navigate to the extracted folder and execute the launcher script for your OS:
 
-**Windows:**
-Double-click **`run_tool.bat`** in the project root.
+* **Windows**: Double-click `testbed-windows.bat`.
+* **Linux (Ubuntu)**: Open a terminal and run `./testbed-ubuntu.sh` (make sure it has execute permissions: `chmod +x testbed-ubuntu.sh`).
+* **macOS**: Double-click the `TestbedCore.app` icon. *(If you see an "unidentified developer" warning, right-click the app, select **Open**, and click **Open** again).*
 
-**macOS / Linux:**
-Run the shell script from the terminal:
-```bash
-./run_tool.sh
-```
-> **Note**: On the first run, the script will automatically check for `platform-tools` (ADB/Fastboot). If they are missing, it will download and set them up in the `bin/` directory.
+> **Note**: On the first run, the script will automatically download the official Android SDK `platform-tools` (ADB/Fastboot) from Google and set them up in the `bin/` directory.
 
 ---
 
-## Development
+## Development & Building from Source
 
 This project is built with **Compose Multiplatform** and **Kotlin**.
 
+### Prerequisites for Development
+* **Java Development Kit (JDK) 17** or higher.
+
 ### Project Structure
 * **`composeApp`**: Main application source code (UI & Logic).
-    * `commonMain`: Shared code (Business logic, ADB handling).
-    * `jvmMain`: Desktop-specific implementations.
 * **`scripts`**: Setup scripts for downloading platform-tools (`setup_tools.bat/sh`).
+* **`pkg-items`**: Launcher scripts and OS-specific README files for distribution packages.
 * **`plugins`**: Directory for placing external test plugin JARs.
+
+### Building Native Distributions
+To generate standalone executable packages (with bundled JRE), run the following command. The output will be located in `composeApp/build/compose/binaries/`.
+
+**macOS / Linux:**
+```bash
+./gradlew :composeApp:createReleaseDistributable
+```
+**Windows:**
+```cmd
+gradlew.bat :composeApp:createReleaseDistributable
+```
+
+*(Note: GitHub Actions is also configured in `.github/workflows/build.yaml` to automatically build and upload these packages as artifacts).*
 
 ### Running in IDE
 To run the application in development mode with hot-reload support:
@@ -71,12 +68,7 @@ To run the application in development mode with hot-reload support:
 ## Troubleshooting
 
 **"ADB not found" error:**
-Ensure you are launching the app using `run_tool.bat` or `run_tool.sh`. These scripts add the bundled `bin/platform-tools` to the PATH temporarily.
-
-**Wireshark / Packet Capture issues:**
-Some test plugins may require Wireshark (`tshark`). Ensure it is installed and accessible if you plan to use network capture features.
-* **Windows**: Install [Npcap](https://npcap.com/) and Wireshark.
-* **Linux**: Ensure your user has permissions to capture packets (e.g., `wireshark` group).
+Ensure you are launching the app using the provided scripts (e.g., `testbed-windows.bat`). These scripts add the bundled `bin/platform-tools` to the `PATH` temporarily.
 
 ## License
 
