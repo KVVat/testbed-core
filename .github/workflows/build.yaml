@@ -38,4 +38,4 @@ jobs:
         with:
           name: TestbedCore-${{ matrix.os }}
           # OSごとの出力パスのブレを吸収するため、ワイルドカードでappディレクトリ配下をすべて取得
-          path: composeApp/build/compose/binaries/main-release/app/*/
+          path: composeApp/build/compose/binaries/**/app/*/
