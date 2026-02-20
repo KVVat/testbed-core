@@ -12,6 +12,7 @@ import com.malinskiy.adam.request.sync.v1.PushFileRequest
 import com.malinskiy.adam.request.forwarding.LocalTcpPortSpec
 import com.malinskiy.adam.request.forwarding.PortForwardRequest
 import com.malinskiy.adam.request.forwarding.RemoteAbstractPortSpec
+import com.malinskiy.adam.request.logcat.LogcatBuffer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.ReceiveChannel
@@ -209,10 +210,16 @@ class AdbObserver(private val viewModel: AppViewModel) {
         logcatJob = viewModel.viewModelScope.launch(Dispatchers.IO) {
             val buffer = StringBuilder()
             try {
+                //Preapre large buffer for logcat
+                //adb.adb.execute(ShellCommandRequest("logcat -G 16M"), adb.deviceSerial)
+
                 val logChannel: ReceiveChannel<String> = adb.adb.execute(
-                    request = ChanneledLogcatRequest(modes = listOf(LogcatReadMode.long)),
+                    request = ChanneledLogcatRequest(modes = listOf(LogcatReadMode.long,)
+                        //,buffers = listOf(LogcatBuffer.all)
+                    ),
                     serial = serial,
-                    scope = this
+                    scope = this,
+
                 )
                 logChannel.consumeEach { chunk ->
                     buffer.append(chunk)
@@ -315,11 +322,63 @@ class AdbObserver(private val viewModel: AppViewModel) {
 
     suspend fun observeAdb() {
         checkDependencies()
+
+        while (currentCoroutineContext().isActive) {
+            try {
+                // 1. 最速でデバイスを検知してLogcatを回すループ (非同期で回し続ける)
+                val earlyLogcatJob = viewModel.viewModelScope.launch(Dispatchers.IO) {
+                    while (isActive) {
+                        val earlySerial = adb.getSerialEarly()
+                        if (earlySerial != null && logcatJob?.isActive != true) {
+                            // デバイスがオンラインになった瞬間にバッファ拡張＆ログ開始！
+                            try {
+                                adb.adb.execute(ShellCommandRequest("logcat -G 16M"), earlySerial)
+                            } catch (e: Exception) { /* 無視 */ }
+
+                            adb.deviceSerial = earlySerial // 一時的にセット
+                            startLogcat()
+                            break // Logcatが開始できたらこの早期検知ループは抜ける
+                        }
+                        delay(200) // 0.2秒間隔で最速ポーリング
+                    }
+                }
+
+                // 2. 既存の「完全起動(ロック画面)」を待つ処理 (ここでブロックされる)
+                withContext(Dispatchers.IO) { adb.startAlone() }
+
+                // 完全起動後の処理
+                while (currentCoroutineContext().isActive) {
+                    delay(1000)
+                    if (viewModel.uiState.value.isRunning) continue
+
+                    if (adb.isDeviceInitialised()) {
+                        if (!viewModel.uiState.value.adbIsValid) {
+                            adbProps = AdbProps(adb.osversion, adb.productmodel, adb.deviceSerial, adb.displayId)
+                            viewModel.toggleAdbIsValid(true)
+
+                            // OSが完全に立ち上がったので、Mutton Agentをデプロイ可能
+                            // setupMuttonAgent()
+                        }
+                        adb.adb.execute(ShellCommandRequest("echo"), adb.deviceSerial)
+                    }
+                }
+            } catch (e: Exception) {
+                if (viewModel.uiState.value.adbIsValid) {
+                    viewModel.toggleAdbIsValid(false)
+                    stopLogcat()
+                }
+                delay(1000)
+            }
+        }
+    }
+    /*
+    suspend fun observeAdb() {
+        checkDependencies()
         while (currentCoroutineContext().isActive) {
             try {
                 withContext(Dispatchers.IO) { adb.startAlone() }
                 while (currentCoroutineContext().isActive) {
-                    delay(1000)
+                    delay(200)
                     if (viewModel.uiState.value.isRunning) continue
                     if (adb.isDeviceInitialised()) {
                         if (!viewModel.uiState.value.adbIsValid) {
@@ -337,11 +396,11 @@ class AdbObserver(private val viewModel: AppViewModel) {
                     viewModel.toggleAdbIsValid(false)
                     stopLogcat()
                 }
-                delay(2000)
+                delay(1000)
             }
         }
     }
-
+    */
     suspend fun pingMuttonAgent() {
         if (!viewModel.uiState.value.adbIsValid) return
 

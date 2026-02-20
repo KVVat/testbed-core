@@ -155,6 +155,15 @@ class AdbDeviceRule(val deviceType: DeviceType = DeviceType.ANY, vararg val requ
         }
     }
 
+    suspend fun getSerialEarly(): String? {
+        try {
+            val devices = adb.execute(ListDevicesRequest())
+            // offline ではなく device として認識された最初のものを返す
+            return devices.firstOrNull { it.state == com.malinskiy.adam.request.device.DeviceState.DEVICE }?.serial
+        } catch (e: Exception) {
+            return null
+        }
+    }
     suspend fun startAdb() {
         try {
             adb.execute(GetAdbServerVersionRequest())
