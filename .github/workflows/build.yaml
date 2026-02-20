@@ -1,6 +1,6 @@
 name: Build Desktop Apps
 
-# 手動で実行ボタンを押せるようにする ＆ v1.0.0 のようなタグを打った時に自動実行
+# 手動実行、または「v」から始まるタグをプッシュした時に起動
 on:
   workflow_dispatch:
   push:
@@ -9,10 +9,10 @@ on:
 
 jobs:
   build:
-    # WindowsとUbuntu(Linux)の両方で同じジョブを並列実行する設定
     strategy:
+      # Windows、Linux、Macの3環境で並列ビルド
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -28,15 +28,14 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      - name: Build Distributable
-        # bashを指定することで、WindowsでもLinuxでも ./gradlew が使えるようにします
+      - name: Build Native Distributable
         shell: bash
+        # JPackageを使って、Java内包型のネイティブアプリを生成
         run: ./gradlew :composeApp:createReleaseDistributable
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          # Windowsなら TestbedCore-windows-latest、Linuxなら TestbedCore-ubuntu-latest という名前で保存
           name: TestbedCore-${{ matrix.os }}
-          # JPackageが出力したフォルダを指定してアップロード
+          # OSごとの出力パスのブレを吸収するため、ワイルドカードでappディレクトリ配下をすべて取得
           path: composeApp/build/compose/binaries/main/app/*/
