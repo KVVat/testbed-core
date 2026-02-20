@@ -1,0 +1,42 @@
+name: Build Desktop Apps
+
+# 手動で実行ボタンを押せるようにする ＆ v1.0.0 のようなタグを打った時に自動実行
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    # WindowsとUbuntu(Linux)の両方で同じジョブを並列実行する設定
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build Distributable
+        # bashを指定することで、WindowsでもLinuxでも ./gradlew が使えるようにします
+        shell: bash
+        run: ./gradlew :composeApp:createReleaseDistributable
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          # Windowsなら TestbedCore-windows-latest、Linuxなら TestbedCore-ubuntu-latest という名前で保存
+          name: TestbedCore-${{ matrix.os }}
+          # JPackageが出力したフォルダを指定してアップロード
+          path: composeApp/build/compose/binaries/main/app/*/

@@ -53,15 +53,35 @@ kotlin {
     }
 }
 
-
+//Build Command ./gradlew :composeApp:createReleaseDistributable
 compose.desktop {
     application {
         mainClass = "org.example.project.MainKt"
-
-        nativeDistributions {
-            targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
-            packageName = "org.example.project"
-            packageVersion = "1.0.0"
+        buildTypes.release.proguard {
+            isEnabled.set(false)
         }
+        nativeDistributions {
+            targetFormats(
+                TargetFormat.Msi,
+                TargetFormat.Exe, // Windows用に追加
+                TargetFormat.Deb, // Linux用
+                TargetFormat.AppImage // Linuxでポータブルに動かすならこれも便利
+            )
+            packageName = "TestbedCore" // アプリの実行ファイル名になります
+            packageVersion = "1.0.0"
+            modules("java.management", "java.naming", "jdk.unsupported", "java.sql")
+            // OSごとの設定 (アイコンなどがあればここで指定可能)
+            windows {
+                menuGroup = "Testbed Tools"
+            }
+            linux {
+                // shortcut = true
+            }
+        }
+//        nativeDistributions {
+//            targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
+//            packageName = "org.example.project"
+//            packageVersion = "1.0.0"
+//        }
     }
 }
