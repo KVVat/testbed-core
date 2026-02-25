@@ -2,6 +2,6 @@
 
 ## How to Run
 
-1.  Double-click `testbed-windows.bat` to execute it.
-2.  On the first launch, or if the `platform-tools` folder is missing, the Android SDK Platform-Tools will be downloaded automatically.
+1.  Double-click `testbed-windows.bat` to execute it. (If you've already installed the sdk tool you can run exe file directly.)
+2.  On the first launch, or if the `bin¥platform-tools` folder is missing, the Android SDK Platform-Tools will be downloaded automatically.
 3.  The application will start.
