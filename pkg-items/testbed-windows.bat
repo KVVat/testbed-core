@@ -1,30 +1,26 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 
-:: =========================================
-:: TestBed Core Portable Launcher for Windows
-:: =========================================
+set "TOOL_DIR=%~dp0"
 
-set TOOL_DIR=%~dp0
-
-:: 1. ADB check
-:: If bin/platform-tools/adb.exe is missing, call the setup script.
 if not exist "%TOOL_DIR%bin\platform-tools\adb.exe" (
     echo [Launcher] ADB not found. Running setup...
     call "%TOOL_DIR%scripts\setup_tools.bat"
 )
 
-:: 2. Set temporary PATH
-:: This is only valid for this command prompt session.
 echo [Launcher] Setting temporary PATH...
-set PATH=%TOOL_DIR%bin\platform-tools;%PATH%
+set "PATH=%TOOL_DIR%bin\platform-tools;%PATH%"
 
-:: 3. Launch Application
-set EXE_PATH=%TOOL_DIR%testbed-core.exe
+set "ANDROID_SDK_ROOT=%TOOL_DIR%bin"
+set "ANDROID_HOME=%TOOL_DIR%bin"
 
+echo [Launcher] where adb:
+where adb
+
+set "EXE_PATH=%TOOL_DIR%TestbedCore.exe"
 if exist "%EXE_PATH%" (
     echo [Launcher] Starting TestBed Core...
-    start "" "%EXE_PATH%"
+    start "" /D "%TOOL_DIR%" "%EXE_PATH%"
 ) else (
     echo [Error] Application not found: %EXE_PATH%
     pause
