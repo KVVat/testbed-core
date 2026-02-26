@@ -12,3 +12,13 @@ On macOS, you might see a dialog saying "TestBed Core.app can't be opened becaus
 1.  Right-click (or Control-click) on `TestBed Core.app`.
 2.  Select "Open" from the context menu.
 3.  Click "Open" again in the dialog that appears.
+
+
+IF you face permission errors try commands following.
+
+``` zsh
+find "TestbedCore.app/Contents/MacOS" -type f -exec chmod +x {} +
+find "TestbedCore.app" -type f \( -path "*/Contents/runtime/*/bin/*" -o -name "jspawnhelper" \) -exec chmod +x {} +
+xattr -dr com.apple.quarantine "TestbedCore.app"
+open "TestbedCore.app"
+```

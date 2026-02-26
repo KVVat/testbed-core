@@ -40,10 +40,26 @@ jobs:
         shell: bash
         run: ./gradlew :composeApp:createReleaseDistributable
 
+      - name: Prepare Artifact (Windows)
+        if: ${{ matrix.os == 'windows-latest' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path "work/artifact" | Out-Null
+          Copy-Item -Path "composeApp/build/compose/binaries/main-release/app" -Destination "work/artifact/app" -Recurse -Force
+
+      - name: Prepare Artifact (Linux/macOS)
+        if: ${{ matrix.os != 'windows-latest' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p work/artifact
+          tar -C composeApp/build/compose/binaries/main-release -czf work/artifact/app.tar.gz app
+
       - name: Upload Native Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: composeApp/build/compose/binaries/main-release/app/**
+          path: work/artifact/**
           if-no-files-found: error
           retention-days: 14

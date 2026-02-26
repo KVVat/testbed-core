@@ -24,6 +24,7 @@
 
 ### 目的
 - Build成果物をダウンロードして再配置し、OS別ZIPを生成する。
+- Linux/macOSはBuild成果物を `tar.gz` で受け取り、実行権限を保持したまま展開する。
 
 ### 起動条件
 - `workflow_run` (Build成功時に自動起動)
@@ -36,6 +37,11 @@
 - `release-zip-windows` (`TestbedCore-windows.zip`)
 - `release-zip-ubuntu` (`TestbedCore-ubuntu.zip`)
 - `release-zip-macos` (`TestbedCore-macos.zip`)
+
+### macOSで `Permission denied` が出る場合
+- まず最新Workflow（権限保持対応後）で作り直したZIPか確認してください。
+- それでも発生する場合は、ダウンロード由来の quarantine 属性が原因の可能性があります。
+  - 例: `xattr -dr com.apple.quarantine TestbedCore.app`
 
 ## 3. Create GitHub Release
 
