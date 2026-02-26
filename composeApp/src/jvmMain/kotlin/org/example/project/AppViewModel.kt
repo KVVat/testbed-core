@@ -307,7 +307,7 @@ class AppViewModel : ViewModel() {
         }
     }
 
-
+    /*
     fun toggleAdbIsValid(isValid: Boolean) {
         _uiState.update { it.copy(adbIsValid = isValid) }
         log(
@@ -322,8 +322,34 @@ class AppViewModel : ViewModel() {
         } else if (!isValid) {
             stopLogcat()  // Stop if disconnected
         }
-    }
+    }*/
+    fun updateAdbState(isValid: Boolean, isUnauthorized: Boolean = false, serial: String = "", info: String = "") {
+        // 状態が変わっていないなら何もしない
+        if (_uiState.value.adbIsValid == isValid &&
+            _uiState.value.isUnauthorized == isUnauthorized &&
+            _uiState.value.deviceSerial == serial) return
 
+        _uiState.update {
+            it.copy(
+                adbIsValid = isValid,
+                isUnauthorized = isUnauthorized,
+                deviceSerial = serial,
+                deviceInfo = info
+            )
+        }
+
+        if (isUnauthorized) {
+            log("ADB", "Device Unauthorized! Please accept the RSA prompt on the device screen.", LogLevel.WARN)
+        } else {
+            log("ADB", "Status: ${if (isValid) "Connected ($serial)" else "Disconnected"}", if (isValid) LogLevel.PASS else LogLevel.ERROR)
+        }
+
+        if (isValid && _isLogcatWindowOpen.value) {
+            startLogcat()
+        } else if (!isValid) {
+            stopLogcat()
+        }
+    }
     fun openLogcatWindow() {
         _isLogcatWindowOpen.value = true
         // Just change the state, don't call startLogcat() here immediately (or call it safely)

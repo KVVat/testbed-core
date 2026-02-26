@@ -2,6 +2,8 @@ package org.example.project.adb
 
 import androidx.lifecycle.viewModelScope
 import com.malinskiy.adam.exception.RequestRejectedException
+import com.malinskiy.adam.request.device.DeviceState
+import com.malinskiy.adam.request.device.ListDevicesRequest
 import com.malinskiy.adam.request.logcat.ChanneledLogcatRequest
 import com.malinskiy.adam.request.logcat.LogcatReadMode
 import com.malinskiy.adam.request.misc.RebootMode
@@ -324,26 +326,37 @@ class AdbObserver(private val viewModel: AppViewModel) {
         checkDependencies()
 
         while (currentCoroutineContext().isActive) {
+            var backgroundMonitorJob: Job? = null
             try {
-                // 1. 最速でデバイスを検知してLogcatを回すループ (非同期で回し続ける)
-                val earlyLogcatJob = viewModel.viewModelScope.launch(Dispatchers.IO) {
+                // 1. 最速検知ループ (そのまま)
+                backgroundMonitorJob = viewModel.viewModelScope.launch(Dispatchers.IO) {
                     while (isActive) {
+                        if (adb.isUnauthorized) {
+                            val earlySerial = adb.getSerialEarly() ?: ""
+                            if (!viewModel.uiState.value.isUnauthorized) {
+                                viewModel.updateAdbState(isValid = false, isUnauthorized = true,serial=earlySerial)
+                            }
+                        } else if (viewModel.uiState.value.isUnauthorized) {
+                            // ★追加: 未認可フラグが消えた（許可された or 抜かれた）
+                            // 端末が1つも見つからないなら「USBが抜かれた」と判断してDisconnectedに戻す
+                            val earlySerial = adb.getSerialEarly()
+                            if (earlySerial == null) {
+                                //adb.isUnauthorized = false
+                                viewModel.updateAdbState(isValid = false, isUnauthorized = false)
+                            }
+                        }
                         val earlySerial = adb.getSerialEarly()
                         if (earlySerial != null && logcatJob?.isActive != true) {
-                            // デバイスがオンラインになった瞬間にバッファ拡張＆ログ開始！
-                            try {
-                                adb.adb.execute(ShellCommandRequest("logcat -G 16M"), earlySerial)
-                            } catch (e: Exception) { /* 無視 */ }
-
-                            adb.deviceSerial = earlySerial // 一時的にセット
+                            try { adb.adb.execute(ShellCommandRequest("logcat -G 16M"), earlySerial) } catch (e: Exception) { /* 無視 */ }
+                            adb.deviceSerial = earlySerial
                             startLogcat()
-                            break // Logcatが開始できたらこの早期検知ループは抜ける
+                            break
                         }
-                        delay(200) // 0.2秒間隔で最速ポーリング
+                        delay(200)
                     }
                 }
 
-                // 2. 既存の「完全起動(ロック画面)」を待つ処理 (ここでブロックされる)
+                // 2. 既存の「完全起動(ロック画面)」を待つ処理
                 withContext(Dispatchers.IO) { adb.startAlone() }
 
                 // 完全起動後の処理
@@ -352,55 +365,60 @@ class AdbObserver(private val viewModel: AppViewModel) {
                     if (viewModel.uiState.value.isRunning) continue
 
                     if (adb.isDeviceInitialised()) {
-                        if (!viewModel.uiState.value.adbIsValid) {
-                            adbProps = AdbProps(adb.osversion, adb.productmodel, adb.deviceSerial, adb.displayId)
-                            viewModel.toggleAdbIsValid(true)
+                        try {
+                            val devices = adb.adb.execute(ListDevicesRequest())
+                            val currentDevice = devices.find { it.serial == adb.deviceSerial }
 
-                            // OSが完全に立ち上がったので、Mutton Agentをデプロイ可能
-                            // setupMuttonAgent()
+                            // ★ 2. 未認可(Unauthorized)の判定
+                            if (currentDevice?.state == DeviceState.UNAUTHORIZED) {
+                                if (!viewModel.uiState.value.isUnauthorized) {
+                                    viewModel.updateAdbState(isValid = false, isUnauthorized = true)
+                                }
+                                continue // 未認可の場合はここでループをやり直し、echoコマンドを打たない
+                            }
+
+                            // 3. 認可済み(Device)なら echo で生存確認
+                            adb.adb.execute(ShellCommandRequest("echo"), adb.deviceSerial)
+
+                            // 成功した場合はUIを Authorized (Active) 状態に更新
+                            /*if (!viewModel.uiState.value.adbIsValid || viewModel.uiState.value.isUnauthorized) {
+                                adbProps = AdbProps(adb.osversion, adb.productmodel, adb.deviceSerial, adb.displayId)
+                                viewModel.updateAdbState(isValid = true, isUnauthorized = false)
+                            }*/
+                            if (!viewModel.uiState.value.adbIsValid || viewModel.uiState.value.isUnauthorized) {
+                                adbProps = AdbProps(adb.osversion, adb.productmodel, adb.deviceSerial, adb.displayId)
+
+                                // ★ 表示用の文字列を組み立てる
+                                val infoStr = """
+                                    Serial: ${adbProps.serial}
+                                    Model: ${adbProps.model}
+                                    OS Version: Android ${adbProps.osVersion}
+                                    Display ID: ${adbProps.displayId}
+                                """.trimIndent()
+
+                                viewModel.updateAdbState(
+                                    isValid = true,
+                                    isUnauthorized = false,
+                                    serial = adbProps.serial,
+                                    info = infoStr
+                                )
+                            }
+                        } catch (e: Exception) {
+                            throw e
                         }
-                        adb.adb.execute(ShellCommandRequest("echo"), adb.deviceSerial)
                     }
                 }
             } catch (e: Exception) {
-                if (viewModel.uiState.value.adbIsValid) {
-                    viewModel.toggleAdbIsValid(false)
+                backgroundMonitorJob?.cancel()
+                // 完全な切断時
+                if (viewModel.uiState.value.adbIsValid || viewModel.uiState.value.isUnauthorized) {
+                    viewModel.updateAdbState(isValid = false, isUnauthorized = false)
                     stopLogcat()
                 }
                 delay(1000)
             }
         }
     }
-    /*
-    suspend fun observeAdb() {
-        checkDependencies()
-        while (currentCoroutineContext().isActive) {
-            try {
-                withContext(Dispatchers.IO) { adb.startAlone() }
-                while (currentCoroutineContext().isActive) {
-                    delay(200)
-                    if (viewModel.uiState.value.isRunning) continue
-                    if (adb.isDeviceInitialised()) {
-                        if (!viewModel.uiState.value.adbIsValid) {
-                            adbProps = AdbProps(adb.osversion, adb.productmodel, adb.deviceSerial, adb.displayId)
-                            viewModel.toggleAdbIsValid(true)
-
-                            // 接続時にエージェントを自動セットアップする場合はここで呼ぶ
-                            setupMuttonAgent()
-                        }
-                        adb.adb.execute(ShellCommandRequest("echo"), adb.deviceSerial)
-                    }
-                }
-            } catch (e: Exception) {
-                if (viewModel.uiState.value.adbIsValid) {
-                    viewModel.toggleAdbIsValid(false)
-                    stopLogcat()
-                }
-                delay(1000)
-            }
-        }
-    }
-    */
     suspend fun pingMuttonAgent() {
         if (!viewModel.uiState.value.adbIsValid) return
 

@@ -48,6 +48,7 @@ fun App() {
     val viewModel: AppViewModel = viewModel { AppViewModel() }
     val logLines = remember { mutableStateListOf<LogLine>() }
     var showSettingsDialog by remember { mutableStateOf(false) }
+    var showDeviceInfoDialog by remember { mutableStateOf(false) }
     val appSettings by viewModel.appSettings.collectAsState() // ★設定を監視
 
     LaunchedEffect(viewModel) {
@@ -100,8 +101,11 @@ fun App() {
                 topBar = {
                     TopControlBar(
                         adbConnected = uiState.adbIsValid,
+                        adbUnauthorized = uiState.isUnauthorized,
+                        deviceSerial = uiState.deviceSerial,
                         isRunning = uiState.isRunning,
                         testPlugins = viewModel.testPlugins,
+                        onDeviceInfoClick= {showDeviceInfoDialog=true},
                         onRunTest = { viewModel.runTest(it) },
                         onRefreshPlugins = { viewModel.refreshPlugins() },
                         onBackClick = { viewModel.pressBack() },
@@ -138,11 +142,19 @@ fun App() {
                 }
             )
         }
+        if (showDeviceInfoDialog) {
+            DeviceInfoDialog(
+                infoText = uiState.deviceInfo,
+                onDismiss = { showDeviceInfoDialog = false }
+            )
+        }
         if (isLogcatWindowOpen) {
             LogcatWindow(viewModel = viewModel, onCloseRequest = { viewModel.closeLogcatWindow() })
         }
     }
 }
+
+
 @Composable
 fun TestListDrawerContent(
     testPlugins: List<TestPlugin>,
@@ -199,9 +211,12 @@ fun TestListDrawerContent(
 @Composable
 fun TopControlBar(
     adbConnected: Boolean,
+    adbUnauthorized: Boolean,
+    deviceSerial: String,
     isRunning: Boolean,
     testPlugins: List<TestPlugin>,
     onRunTest: (TestPlugin) -> Unit,
+    onDeviceInfoClick: () -> Unit,
     onRefreshPlugins: () -> Unit,
     onBackClick: () -> Unit,
     onHomeClick: () -> Unit,
@@ -245,9 +260,33 @@ fun TopControlBar(
                 // ... (セパレータや端末ステータス表示はそのまま) ...
                 Divider(Modifier.height(24.dp).width(1.dp), color = Color.Gray)
                 Spacer(Modifier.width(12.dp))
-                Icon(Icons.Default.PhoneAndroid, null, tint = if (adbConnected) Color(0xFF6B9F78) else Color.Gray, modifier = Modifier.size(20.dp))
+
+
+                val deviceStatusColor = when {
+                    adbUnauthorized -> Color(0xFFFFC66D) // 警告の黄色 (Warning)
+                    adbConnected -> Color(0xFF6B9F78)    // 正常の緑 (Active)
+                    else -> Color.Gray                   // 切断のグレー
+                }
+
+                val deviceStatusText = when {
+                    adbUnauthorized -> "Unauthorized ($deviceSerial)"
+                    adbConnected -> deviceSerial.ifEmpty { "Connected" } // ★ シリアル番号を表示
+                    else -> "Disconnected"
+                }
+                Icon(Icons.Default.PhoneAndroid, null, tint =deviceStatusColor, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
-                Text(text = if (adbConnected) "Pixel 8 (Active)" else "Disconnected", fontSize = 13.sp, color = Color.LightGray)
+
+                Text(
+                    text = deviceStatusText,
+                    fontSize = 13.sp,
+                    color = deviceStatusColor // 文字色もアイコンに合わせる
+                )
+                if (adbConnected || adbUnauthorized) {
+                    Spacer(Modifier.width(4.dp))
+                    IconButton(onClick = onDeviceInfoClick, modifier = Modifier.size(24.dp)) {
+                        Icon(Icons.Default.Info, contentDescription = "Device Info", tint = deviceStatusColor, modifier = Modifier.size(16.dp))
+                    }
+                }
                 Divider(Modifier.height(24.dp).width(1.dp).padding(horizontal = 8.dp), color = Color.Gray)
 
                 // ★追加: 羊（Mutton Agent）接続ボタン
@@ -582,6 +621,39 @@ fun SettingsDialog(
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF569CD6))
                     ) {
                         Text("Save")
+                    }
+                }
+            }
+        }
+    }
+}
+@Composable
+fun DeviceInfoDialog(infoText: String, onDismiss: () -> Unit) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = RoundedCornerShape(8.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2D30)),
+            modifier = Modifier.padding(16.dp).width(300.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("Device Information", color = Color.White, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(12.dp))
+
+                // ★ SelectionContainer で囲むことでマウスでテキスト選択＆コピペ可能になる
+                SelectionContainer {
+                    Text(
+                        text = infoText.ifEmpty { "No information available." },
+                        color = Color.LightGray,
+                        fontSize = 13.sp,
+                        fontFamily = FontFamily.Monospace,
+                        lineHeight = 20.sp
+                    )
+                }
+
+                Spacer(Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                    TextButton(onClick = onDismiss) {
+                        Text("Close", color = Color(0xFF569CD6))
                     }
                 }
             }

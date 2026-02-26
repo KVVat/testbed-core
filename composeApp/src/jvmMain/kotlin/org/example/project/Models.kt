@@ -15,8 +15,10 @@ enum class LogLevel {
     INFO, DEBUG, ERROR, PASS,WARN
 }
 
-// ついでにこれもここに移動しておくとスッキリします
 data class AppUiState(
     val isRunning: Boolean = false,
-    val adbIsValid: Boolean = false
+    val adbIsValid: Boolean = false,
+    val isUnauthorized: Boolean = false,
+    val deviceSerial: String = "",       // ★追加
+    val deviceInfo: String = ""          // ★追加
 )

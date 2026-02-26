@@ -11,6 +11,7 @@ import com.malinskiy.adam.request.misc.GetAdbServerVersionRequest
 import com.malinskiy.adam.request.prop.GetSinglePropRequest
 import com.malinskiy.adam.request.shell.v1.ShellCommandRequest
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
@@ -36,6 +37,9 @@ class AdbDeviceRule(val deviceType: DeviceType = DeviceType.ANY, vararg val requ
     lateinit var displayId: String
     lateinit var productmodel: String
 
+    // ★追加: 外部から参照できる未認可状態のフラグ
+    var isUnauthorized: Boolean = false
+
     val adb = AndroidDebugBridgeClientFactory().build()
     val initTimeout: Duration = Duration.ofSeconds(10)
     fun isDeviceInitialised() = ::deviceSerial.isInitialized
@@ -57,41 +61,22 @@ class AdbDeviceRule(val deviceType: DeviceType = DeviceType.ANY, vararg val requ
             }
         }
     }
-    suspend fun waitBoot(){
-        runBlocking {
 
-            loop@ for (device in adb.execute(ListDevicesRequest())) {
-                try {
-                    val booted =
-                        adb.execute(GetSinglePropRequest("sys.boot_completed"), device.serial)
-                            .isNotBlank()
-                    if (!booted) continue
-
-                    supportedFeatures = adb.execute(FetchDeviceFeaturesRequest(device.serial))
-                    if (requiredFeatures.isNotEmpty()) {
-                        Assume.assumeTrue(
-                            "No compatible device found for features $requiredFeatures",
-                            supportedFeatures.containsAll(requiredFeatures.asList())
-                        )
-                    } else {
-                        continue
-                    }
-
-                } catch (e: ConnectException) {
-                    //logging("connecting ... ")
-                    continue
-                } catch (e: RequestRejectedException) {
-                    //logging("rejecting ... ")
-                    continue
-                }
-            }
-        }
-    }
 
     private suspend fun CoroutineScope.waitForDevice(): Device {
         while (isActive) {
             try {
-                loop@ for (device in adb.execute(ListDevicesRequest())) {
+                val devices = adb.execute(ListDevicesRequest())
+
+                //isUnauthorized = devices.any { it.state == com.malinskiy.adam.request.device.DeviceState.UNAUTHORIZED }
+                isUnauthorized = false
+
+                loop@ for (device in devices) {
+                    if(device.state == com.malinskiy.adam.request.device.DeviceState.UNAUTHORIZED) {
+                        isUnauthorized = true
+                        continue
+                    }
+
                     val booted = adb.execute(GetSinglePropRequest("sys.boot_completed"), device.serial).isNotBlank()
                     if (!booted) continue
 
@@ -137,6 +122,7 @@ class AdbDeviceRule(val deviceType: DeviceType = DeviceType.ANY, vararg val requ
             } catch (e: ConnectException) {
                 continue
             }
+            //delay(1000)
         }
         throw RuntimeException("Timeout waiting for device")
     }
@@ -171,6 +157,36 @@ class AdbDeviceRule(val deviceType: DeviceType = DeviceType.ANY, vararg val requ
             val success = StartAdbInteractor().execute()
             if (!success) {
                 throw RuntimeException("Unable to start adb")
+            }
+        }
+    }
+    suspend fun waitBoot(){
+        runBlocking {
+
+            loop@ for (device in adb.execute(ListDevicesRequest())) {
+                try {
+                    val booted =
+                        adb.execute(GetSinglePropRequest("sys.boot_completed"), device.serial)
+                            .isNotBlank()
+                    if (!booted) continue
+
+                    supportedFeatures = adb.execute(FetchDeviceFeaturesRequest(device.serial))
+                    if (requiredFeatures.isNotEmpty()) {
+                        Assume.assumeTrue(
+                            "No compatible device found for features $requiredFeatures",
+                            supportedFeatures.containsAll(requiredFeatures.asList())
+                        )
+                    } else {
+                        continue
+                    }
+
+                } catch (e: ConnectException) {
+                    //logging("connecting ... ")
+                    continue
+                } catch (e: RequestRejectedException) {
+                    //logging("rejecting ... ")
+                    continue
+                }
             }
         }
     }
