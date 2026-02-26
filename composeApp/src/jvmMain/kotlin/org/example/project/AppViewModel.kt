@@ -30,14 +30,6 @@ import org.example.project.tools.LogcatParser
 import org.example.project.tools.ProcessNameResolver
 
 
-data class TestPlugin(
-    val id: String,
-    val name: String,
-    val clazz: Class<*>,
-    val shortName: String,
-    val status: String = "Ready"
-)
-
 data class AppSettings(
     val autoOpenLogcat: Boolean = true,
     val logcatBufferSize: Int = 2000
@@ -102,7 +94,7 @@ class AppViewModel : ViewModel() {
                 _appSettings.value = AppSettings(
                     autoOpenLogcat = props.getProperty("autoOpenLogcat", "true").toBoolean(),
                     logcatBufferSize = props.getProperty("logcatBufferSize", "30000").toIntOrNull()
-                        ?: 2000
+                        ?: 30000
                 )
             } catch (e: Exception) {
                 log("SYSTEM", "Failed to load settings: ${e.message}", LogLevel.ERROR)
@@ -146,54 +138,85 @@ class AppViewModel : ViewModel() {
                 log("SYSTEM", "No plugin JARs found in ${PLUGINS_DIR.name}", LogLevel.INFO)
                 return@launch
             }
-
+            var loadedCount = 0 // ★追加: ロードできた件数をカウント
             jarFiles.forEach { jarFile ->
                 try {
-                    // Create a URLClassLoader for each JAR
-                    val loader =
-                        URLClassLoader(arrayOf(jarFile.toURI().toURL()), this.javaClass.classLoader)
+                    var isFastLoaded = false;
 
-                    JarFile(jarFile).use { jar ->
-                        val entries = jar.entries()
-                        while (entries.hasMoreElements()) {
-                            val entry = entries.nextElement()
-
-                            // Is a class file and excludes anonymous/inner classes ($)
-                            if (entry.name.endsWith(".class") && !entry.name.contains("$")) {
-                                val className = entry.name.replace("/", ".").removeSuffix(".class")
-
-                                try {
-                                    val clazz = loader.loadClass(className)
-
-                                    // Check for methods annotated with @Test
-                                    val hasTestAnnotation = clazz.methods.any {
-                                        it.isAnnotationPresent(org.junit.Test::class.java)
-                                    }
-
-                                    if (hasTestAnnotation) {
+                    java.util.jar.JarFile(jarFile).use { jar ->
+                        val entry = jar.getJarEntry("META-INF/testbed-tests.list")
+                        if (entry != null) {
+                            jar.getInputStream(entry).bufferedReader().useLines { lines ->
+                                lines.forEach { className ->
+                                    if (className.isNotBlank()) {
                                         withContext(Dispatchers.Main) {
-                                            // Prevent duplicate registration
-                                            if (_testPlugins.none { it.clazz == clazz }) {
-                                                // Get the folder name for easy identification
-                                                val parentDirName = jarFile.parentFile.name
+                                            val parentDirName = jarFile.parentFile.name
+                                            val shortName = className.substringAfterLast('.')
+
+                                            if (_testPlugins.none { it.className == className && it.jarFile == jarFile }) {
                                                 _testPlugins.add(
                                                     TestPlugin(
-                                                        id = "${parentDirName}_${clazz.simpleName}",
-                                                        name = "[$parentDirName] ${clazz.simpleName}",
-                                                        clazz = clazz,
-                                                        shortName = clazz.simpleName
+                                                        id = "${parentDirName}_$shortName",
+                                                        name = "[$parentDirName] $shortName",
+                                                        className = className, // ★文字列だけ渡す
+                                                        jarFile = jarFile,     // ★JARパスを渡す
+                                                        shortName = shortName
                                                     )
                                                 )
-                                                log(
-                                                    "SYSTEM",
-                                                    "Plugin loaded: ${clazz.simpleName} (from $parentDirName)",
-                                                    LogLevel.PASS
-                                                )
+                                                loadedCount++
                                             }
                                         }
                                     }
-                                } catch (e: Throwable) {
-                                    // Skip class loading failures
+                                }
+                            }
+                            isFastLoaded = true //
+                        }
+                    }
+
+
+                    // Create a URLClassLoader for each JAR
+                    if(!isFastLoaded){
+                        val loader =
+                            URLClassLoader(arrayOf(jarFile.toURI().toURL()), this.javaClass.classLoader)
+
+                        JarFile(jarFile).use { jar ->
+                            val entries = jar.entries()
+                            while (entries.hasMoreElements()) {
+                                val entry = entries.nextElement()
+
+                                // Is a class file and excludes anonymous/inner classes ($)
+                                if (entry.name.endsWith(".class") && !entry.name.contains("$")) {
+                                    val className = entry.name.replace("/", ".").removeSuffix(".class")
+
+                                    try {
+                                        val clazz = loader.loadClass(className)
+
+                                        // Check for methods annotated with @Test
+                                        val hasTestAnnotation = clazz.methods.any {
+                                            it.isAnnotationPresent(org.junit.Test::class.java)
+                                        }
+
+                                        if (hasTestAnnotation) {
+                                            withContext(Dispatchers.Main) {
+                                                // Prevent duplicate registration
+                                                if (_testPlugins.none { it.clazz == clazz }) {
+                                                    // Get the folder name for easy identification
+                                                    val parentDirName = jarFile.parentFile.name
+                                                    _testPlugins.add(
+                                                        TestPlugin(
+                                                            id = "${parentDirName}_${clazz.simpleName}",
+                                                            name = "${clazz.simpleName}",
+                                                            clazz = clazz,
+                                                            shortName = clazz.simpleName
+                                                        )
+                                                    )
+                                                    loadedCount++
+                                                }
+                                            }
+                                        }
+                                    } catch (e: Throwable) {
+                                        // Skip class loading failures
+                                    }
                                 }
                             }
                         }
@@ -205,6 +228,12 @@ class AppViewModel : ViewModel() {
                         LogLevel.ERROR
                     )
                 }
+            }
+            // ★追加: 最後にまとめて結果を出力
+            if (loadedCount > 0) {
+                log("SYSTEM", "$loadedCount plugins loaded.", LogLevel.PASS)
+            } else {
+                log("SYSTEM", "No new plugins loaded.", LogLevel.INFO)
             }
         }
     }
@@ -269,10 +298,13 @@ class AppViewModel : ViewModel() {
 
                 // Set the class loader to the current thread's context (for resolving resources in the JAR)
                 val originalClassLoader = Thread.currentThread().contextClassLoader
-                Thread.currentThread().contextClassLoader = plugin.clazz.classLoader
+                val targetClass = plugin.resolveClass()
+
+                Thread.currentThread().contextClassLoader = targetClass.classLoader
+                //Thread.currentThread().contextClassLoader = plugin.clazz?.classLoader
 
                 try {
-                    val runner = JUnitTestRunner(arrayOf(plugin.clazz), antRunner)
+                    val runner = JUnitTestRunner(arrayOf(targetClass), antRunner)
                     runner.start()
                 } finally {
                     Thread.currentThread().contextClassLoader = originalClassLoader
@@ -307,22 +339,6 @@ class AppViewModel : ViewModel() {
         }
     }
 
-    /*
-    fun toggleAdbIsValid(isValid: Boolean) {
-        _uiState.update { it.copy(adbIsValid = isValid) }
-        log(
-            "ADB",
-            "Status: ${if (isValid) "Connected" else "Disconnected"}",
-            if (isValid) LogLevel.PASS else LogLevel.ERROR
-        )
-
-        // Added: Automatic Logcat control when connection status changes
-        if (isValid && _isLogcatWindowOpen.value) {
-            startLogcat() // Start if connected and window is open
-        } else if (!isValid) {
-            stopLogcat()  // Stop if disconnected
-        }
-    }*/
     fun updateAdbState(isValid: Boolean, isUnauthorized: Boolean = false, serial: String = "", info: String = "") {
         // 状態が変わっていないなら何もしない
         if (_uiState.value.adbIsValid == isValid &&
