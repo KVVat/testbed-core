@@ -40,8 +40,18 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ secrets.RELEASE_TOKEN != '' && secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
 
     steps:
+      - name: Show Token Source
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.RELEASE_TOKEN }}" ]; then
+            echo "Using RELEASE_TOKEN secret for release operations."
+          else
+            echo "Using default GITHUB_TOKEN for release operations."
+          fi
+
       - name: Validate Confirmation Token
         shell: bash
         run: |
@@ -54,7 +64,7 @@ jobs:
       - name: Download Zip Artifacts
         uses: actions/download-artifact@v4
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.RELEASE_TOKEN != '' && secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           run-id: ${{ inputs.package_run_id }}
           pattern: release-zip-*
           merge-multiple: true
@@ -79,8 +89,6 @@ jobs:
 
       - name: Resolve Target Commit
         id: target
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
@@ -93,7 +101,6 @@ jobs:
 
       - name: Create or Update Release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ inputs.tag_name }}
           RELEASE_NAME: ${{ inputs.release_name }}
           DRAFT: ${{ inputs.draft }}
@@ -116,7 +123,14 @@ jobs:
           fi
 
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release upload "$TAG_NAME" "${assets[@]}" --clobber
+            if ! gh release upload "$TAG_NAME" "${assets[@]}" --clobber 2>release_err.log; then
+              cat release_err.log
+              if grep -q "Resource not accessible by integration" release_err.log; then
+                echo "Permission error: enable 'Read and write permissions' in repo Settings > Actions > General,"
+                echo "or set repository secret RELEASE_TOKEN (PAT with repo/contents write)."
+              fi
+              exit 1
+            fi
             edit_args=(--title "$title")
             if [ "$DRAFT" = "true" ]; then
               edit_args+=(--draft)
@@ -128,7 +142,14 @@ jobs:
             else
               edit_args+=(--prerelease=false)
             fi
-            gh release edit "$TAG_NAME" "${edit_args[@]}"
+            if ! gh release edit "$TAG_NAME" "${edit_args[@]}" 2>release_err.log; then
+              cat release_err.log
+              if grep -q "Resource not accessible by integration" release_err.log; then
+                echo "Permission error: enable 'Read and write permissions' in repo Settings > Actions > General,"
+                echo "or set repository secret RELEASE_TOKEN (PAT with repo/contents write)."
+              fi
+              exit 1
+            fi
           else
             create_args=("$TAG_NAME" "${assets[@]}" --title "$title" --generate-notes --target "$TARGET_SHA")
             if [ "$DRAFT" = "true" ]; then
@@ -137,5 +158,12 @@ jobs:
             if [ "$PRERELEASE" = "true" ]; then
               create_args+=(--prerelease)
             fi
-            gh release create "${create_args[@]}"
+            if ! gh release create "${create_args[@]}" 2>release_err.log; then
+              cat release_err.log
+              if grep -q "Resource not accessible by integration" release_err.log; then
+                echo "Permission error: enable 'Read and write permissions' in repo Settings > Actions > General,"
+                echo "or set repository secret RELEASE_TOKEN (PAT with repo/contents write)."
+              fi
+              exit 1
+            fi
           fi

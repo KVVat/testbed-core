@@ -60,6 +60,17 @@
 
 上記3つが揃っていない場合、Release作成は失敗します。
 
+### トークンと権限
+- 既定では `GITHUB_TOKEN` を使用
+- リポジトリシークレット `RELEASE_TOKEN` がある場合はそちらを優先使用
+
+`HTTP 403: Resource not accessible by integration` が出る場合:
+
+1. リポジトリ設定 `Settings > Actions > General > Workflow permissions` を `Read and write permissions` に変更
+2. もしくは `RELEASE_TOKEN` を追加
+   - Classic PAT: `repo` scope
+   - Fine-grained PAT: 対象Repoの `Contents: Read and write`
+
 ## 実運用手順
 
 1. 必要ならタグ作成してpush (`v*`) するか、`Build Desktop Artifacts` を手動実行する。
