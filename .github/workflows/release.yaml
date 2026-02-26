@@ -1,0 +1,139 @@
+name: Create GitHub Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_run_id:
+        description: "Repackage and Zip Desktop Artifacts の run ID"
+        required: true
+        type: string
+      tag_name:
+        description: "Release tag (例: v1.2.3)"
+        required: true
+        type: string
+      release_name:
+        description: "Release title (空欄なら tag_name を利用)"
+        required: false
+        default: ""
+        type: string
+      draft:
+        description: "Draft release として作成する"
+        required: true
+        default: true
+        type: boolean
+      prerelease:
+        description: "Prerelease としてマークする"
+        required: true
+        default: false
+        type: boolean
+      confirm:
+        description: "実行確認: RELEASE と入力"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate Confirmation Token
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.confirm }}" != "RELEASE" ]; then
+            echo "For safety, inputs.confirm must be RELEASE."
+            exit 1
+          fi
+
+      - name: Download Zip Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.package_run_id }}
+          pattern: release-zip-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Validate Assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -la release-assets
+          required_assets=(
+            "TestbedCore-windows.zip"
+            "TestbedCore-ubuntu.zip"
+            "TestbedCore-macos.zip"
+          )
+          for asset in "${required_assets[@]}"; do
+            if [ ! -f "release-assets/$asset" ]; then
+              echo "Missing asset: $asset (run ID: ${{ inputs.package_run_id }})"
+              exit 1
+            fi
+          done
+
+      - name: Resolve Target Commit
+        id: target
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          head_sha="$(gh api repos/${{ github.repository }}/actions/runs/${{ inputs.package_run_id }} --jq .head_sha)"
+          if [ -z "$head_sha" ] || [ "$head_sha" = "null" ]; then
+            echo "Failed to resolve head_sha from package run."
+            exit 1
+          fi
+          echo "sha=$head_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Create or Update Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ inputs.tag_name }}
+          RELEASE_NAME: ${{ inputs.release_name }}
+          DRAFT: ${{ inputs.draft }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          title="$RELEASE_NAME"
+          if [ -z "$title" ]; then
+            title="$TAG_NAME"
+          fi
+
+          shopt -s nullglob
+          assets=(release-assets/*.zip)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "No release assets found."
+            exit 1
+          fi
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" "${assets[@]}" --clobber
+            edit_args=(--title "$title")
+            if [ "$DRAFT" = "true" ]; then
+              edit_args+=(--draft)
+            else
+              edit_args+=(--draft=false)
+            fi
+            if [ "$PRERELEASE" = "true" ]; then
+              edit_args+=(--prerelease)
+            else
+              edit_args+=(--prerelease=false)
+            fi
+            gh release edit "$TAG_NAME" "${edit_args[@]}"
+          else
+            create_args=("$TAG_NAME" "${assets[@]}" --title "$title" --generate-notes --target "$TARGET_SHA")
+            if [ "$DRAFT" = "true" ]; then
+              create_args+=(--draft)
+            fi
+            if [ "$PRERELEASE" = "true" ]; then
+              create_args+=(--prerelease)
+            fi
+            gh release create "${create_args[@]}"
+          fi

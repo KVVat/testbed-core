@@ -1,18 +1,26 @@
-name: Build Desktop Apps
+name: Build Desktop Artifacts
 
-# 手動実行、または「v」から始まるタグをプッシュした時に起動
 on:
   workflow_dispatch:
   push:
     tags:
-      - 'v*'
+      - "v*"
+
+permissions:
+  contents: read
 
 jobs:
   build:
     strategy:
-      # Windows、Linux、Macの3環境で並列ビルド
+      fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        include:
+          - os: windows-latest
+            artifact_name: TestbedCore-windows-latest
+          - os: ubuntu-latest
+            artifact_name: TestbedCore-ubuntu-latest
+          - os: macos-latest
+            artifact_name: TestbedCore-macos-latest
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -22,20 +30,20 @@ jobs:
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
-          distribution: 'zulu'
-          java-version: '17'
+          distribution: "zulu"
+          java-version: "17"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
       - name: Build Native Distributable
         shell: bash
-        # JPackageを使って、Java内包型のネイティブアプリを生成
         run: ./gradlew :composeApp:createReleaseDistributable
 
-      - name: Upload Artifact
+      - name: Upload Native Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TestbedCore-${{ matrix.os }}
-          # OSごとの出力パスのブレを吸収するため、ワイルドカードでappディレクトリ配下をすべて取得
-          path: composeApp/build/compose/binaries/**/app/*/
+          name: ${{ matrix.artifact_name }}
+          path: composeApp/build/compose/binaries/main-release/app/**
+          if-no-files-found: error
+          retention-days: 14

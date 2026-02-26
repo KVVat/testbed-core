@@ -56,7 +56,7 @@ To generate standalone executable packages (with bundled JRE), run the following
 gradlew.bat :composeApp:createReleaseDistributable
 ```
 
-*(Note: GitHub Actions is also configured in `.github/workflows/build.yaml` to automatically build and upload these packages as artifacts).*
+*(Note: GitHub Actions has separate workflows under `.github/workflows/` for `build` -> `repackage-zip` -> `release`.)*
 
 ### Running in IDE
 To run the application in development mode with hot-reload support:

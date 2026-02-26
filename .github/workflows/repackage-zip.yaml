@@ -1,0 +1,151 @@
+name: Repackage and Zip Desktop Artifacts
+
+on:
+  workflow_run:
+    workflows: ["Build Desktop Artifacts"]
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: "Build Desktop Artifacts の run ID"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  repackage:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            build_artifact: TestbedCore-windows-latest
+            zip_artifact: release-zip-windows
+            zip_file: TestbedCore-windows.zip
+          - os: ubuntu-latest
+            build_artifact: TestbedCore-ubuntu-latest
+            zip_artifact: release-zip-ubuntu
+            zip_file: TestbedCore-ubuntu.zip
+          - os: macos-latest
+            build_artifact: TestbedCore-macos-latest
+            zip_artifact: release-zip-macos
+            zip_file: TestbedCore-macos.zip
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve Build Run ID
+        id: build_run
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            echo "id=${{ github.event.workflow_run.id }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "id=${{ inputs.build_run_id }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download Build Artifact
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ steps.build_run.outputs.id }}
+          name: ${{ matrix.build_artifact }}
+          path: work/raw
+
+      - name: Repackage (Windows)
+        if: ${{ matrix.os == 'windows-latest' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $OutDir = "work/package/windows"
+          New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+          New-Item -ItemType Directory -Force -Path "$OutDir\scripts" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$OutDir\bin" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$OutDir\plugins" | Out-Null
+
+          $Exe = Get-ChildItem -Path "work/raw" -Recurse -File -Filter "TestbedCore.exe" |
+            Where-Object { $_.FullName -match "[\\/]TestbedCore[\\/]TestbedCore\.exe$" } |
+            Select-Object -First 1
+          if (-not $Exe) { throw "TestbedCore.exe not found in downloaded artifact." }
+
+          $AppRoot = Split-Path -Path $Exe.FullName -Parent
+          Copy-Item -Path "$AppRoot\*" -Destination $OutDir -Recurse -Force
+
+          Copy-Item -Path "scripts/setup_tools.bat" -Destination "$OutDir\scripts\setup_tools.bat" -Force
+          Copy-Item -Path "pkg-items/testbed-windows.bat" -Destination "$OutDir\testbed-windows.bat" -Force
+          Copy-Item -Path "pkg-items/README_WINDOWS.md" -Destination "$OutDir\README.md" -Force
+
+      - name: Repackage (Ubuntu)
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          out_dir="work/package/ubuntu"
+          mkdir -p "$out_dir" "$out_dir/scripts" "$out_dir/bin" "$out_dir/plugins" "$out_dir/main-release/app"
+
+          exe_path="$(find work/raw -type f -path '*/TestbedCore/bin/TestbedCore' | head -n 1)"
+          if [ -z "$exe_path" ]; then
+            echo "TestbedCore executable not found in downloaded artifact."
+            exit 1
+          fi
+
+          app_dir="$(dirname "$(dirname "$exe_path")")"
+          cp -R "$app_dir" "$out_dir/main-release/app/"
+          cp scripts/setup_tools.sh "$out_dir/scripts/setup_tools.sh"
+          cp pkg-items/testbed-ubuntu.sh "$out_dir/testbed-ubuntu.sh"
+          cp pkg-items/README_UBUNTU.md "$out_dir/README.md"
+          chmod +x "$out_dir/testbed-ubuntu.sh" "$out_dir/scripts/setup_tools.sh"
+
+      - name: Repackage (macOS)
+        if: ${{ matrix.os == 'macos-latest' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          out_dir="work/package/macos"
+          mkdir -p "$out_dir"
+
+          app_bundle="$(find work/raw -type d -path '*/TestbedCore.app' | head -n 1)"
+          if [ -z "$app_bundle" ]; then
+            echo "macOS app bundle not found in downloaded artifact."
+            exit 1
+          fi
+
+          cp -R "$app_bundle" "$out_dir/"
+          cp pkg-items/README_MACOS.md "$out_dir/README.md"
+
+      - name: Zip Package (Windows)
+        if: ${{ matrix.os == 'windows-latest' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path "work/zip" | Out-Null
+          Compress-Archive -Path "work/package/windows/*" -DestinationPath "work/zip/${{ matrix.zip_file }}" -Force
+
+      - name: Zip Package (Linux/macOS)
+        if: ${{ matrix.os != 'windows-latest' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p work/zip
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            cd work/package/ubuntu
+          else
+            cd work/package/macos
+          fi
+          zip -qry "../../zip/${{ matrix.zip_file }}" .
+
+      - name: Upload Zip Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.zip_artifact }}
+          path: work/zip/${{ matrix.zip_file }}
+          if-no-files-found: error
+          retention-days: 30
