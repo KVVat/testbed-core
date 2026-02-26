@@ -53,6 +53,10 @@
 - `prerelease` (必須): Prerelease扱いにするか
 - `confirm` (必須): `RELEASE` 固定
 
+### 前提条件
+- `tag_name` が未存在でも `Create GitHub Release` 実行時に自動作成されます。
+- タグは `package_run_id` が指す実行の `head_sha` に作成されます。
+
 ### 実行前チェック
 - `TestbedCore-windows.zip`
 - `TestbedCore-ubuntu.zip`
@@ -68,8 +72,8 @@
 
 1. リポジトリ設定 `Settings > Actions > General > Workflow permissions` を `Read and write permissions` に変更
 2. もしくは `RELEASE_TOKEN` を追加
-   - Classic PAT: `repo` scope
-   - Fine-grained PAT: 対象Repoの `Contents: Read and write`
+   - Classic PAT: `repo`, `workflow` scope
+   - Fine-grained PAT: 対象Repoの `Contents: Read and write`, `Workflows: Read and write`
 
 ## 実運用手順
 

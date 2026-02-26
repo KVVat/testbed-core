@@ -125,9 +125,9 @@ jobs:
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
             if ! gh release upload "$TAG_NAME" "${assets[@]}" --clobber 2>release_err.log; then
               cat release_err.log
-              if grep -q "Resource not accessible by integration" release_err.log; then
+              if grep -Eq "Resource not accessible by integration|Resource not accessible by personal access token|workflow scope may be required" release_err.log; then
                 echo "Permission error: enable 'Read and write permissions' in repo Settings > Actions > General,"
-                echo "or set repository secret RELEASE_TOKEN (PAT with repo/contents write)."
+                echo "or set RELEASE_TOKEN with classic PAT scopes: repo, workflow."
               fi
               exit 1
             fi
@@ -144,9 +144,9 @@ jobs:
             fi
             if ! gh release edit "$TAG_NAME" "${edit_args[@]}" 2>release_err.log; then
               cat release_err.log
-              if grep -q "Resource not accessible by integration" release_err.log; then
+              if grep -Eq "Resource not accessible by integration|Resource not accessible by personal access token|workflow scope may be required" release_err.log; then
                 echo "Permission error: enable 'Read and write permissions' in repo Settings > Actions > General,"
-                echo "or set repository secret RELEASE_TOKEN (PAT with repo/contents write)."
+                echo "or set RELEASE_TOKEN with classic PAT scopes: repo, workflow."
               fi
               exit 1
             fi
@@ -160,9 +160,9 @@ jobs:
             fi
             if ! gh release create "${create_args[@]}" 2>release_err.log; then
               cat release_err.log
-              if grep -q "Resource not accessible by integration" release_err.log; then
+              if grep -Eq "Resource not accessible by integration|Resource not accessible by personal access token|workflow scope may be required" release_err.log; then
                 echo "Permission error: enable 'Read and write permissions' in repo Settings > Actions > General,"
-                echo "or set repository secret RELEASE_TOKEN (PAT with repo/contents write)."
+                echo "or set RELEASE_TOKEN with classic PAT scopes: repo, workflow."
               fi
               exit 1
             fi
