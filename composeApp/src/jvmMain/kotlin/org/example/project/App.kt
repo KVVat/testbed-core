@@ -112,8 +112,7 @@ fun App() {
                         onHomeClick = { viewModel.pressHome() },
                         onSendText = { text -> viewModel.sendText(text) },
                         onScreenshotClick = { viewModel.captureScreenshot() },
-                        onMenuClick = { scope.launch { drawerState.open() } },
-                        onConnectAgentClick = { viewModel.connectAndPingAgent() }
+                        onMenuClick = { scope.launch { drawerState.open() } }
                     )
                 },
                 content = { padding ->
@@ -139,7 +138,8 @@ fun App() {
                 onSave = { newSettings ->
                     viewModel.saveSettings(newSettings)
                     showSettingsDialog = false
-                }
+                },
+                onReinstallAgent = { viewModel.reinstallMuttonAgent() }
             )
         }
         if (showDeviceInfoDialog) {
@@ -222,8 +222,7 @@ fun TopControlBar(
     onHomeClick: () -> Unit,
     onSendText: (String) -> Unit,
     onScreenshotClick: () -> Unit,
-    onMenuClick: () -> Unit,
-    onConnectAgentClick: () -> Unit
+    onMenuClick: () -> Unit
 ) {
     TopAppBar(
         colors = TopAppBarDefaults.topAppBarColors(
@@ -286,26 +285,6 @@ fun TopControlBar(
                     IconButton(onClick = onDeviceInfoClick, modifier = Modifier.size(24.dp)) {
                         Icon(Icons.Default.Info, contentDescription = "Device Info", tint = deviceStatusColor, modifier = Modifier.size(16.dp))
                     }
-                }
-                Divider(Modifier.height(24.dp).width(1.dp).padding(horizontal = 8.dp), color = Color.Gray)
-
-                // ★追加: 羊（Mutton Agent）接続ボタン
-                TooltipIconButton(
-                    // SVGリソースをロード (ビルド後に Res.drawable.ic_sheep が生成されます)
-                    //icon = null, // painterを使うのでiconはnullまたは無視されるように実装調整が必要ですが、
-                    // TooltipIconButtonがImageVector専用なら、Iconコンポーネントを直接使うか、
-                    // painter対応版を作る必要があります。
-                    // 簡易的にIconでpainterを指定する場合:
-                    onClick = onConnectAgentClick,
-                    tooltip = "Connect Mutton Agent (11451)",
-                    enabled = adbConnected
-                ) {
-                    Icon(
-                        painter = painterResource(Res.drawable.ic_sheep),
-                        contentDescription = "Mutton Agent",
-                        tint = if (adbConnected) Color.White else Color.Gray,// SVG元の色を使う場合
-                        modifier = Modifier.size(24.dp)
-                    )
                 }
                 if (isRunning) {
                     Spacer(Modifier.width(16.dp))
@@ -562,7 +541,8 @@ fun InputTextDialog(onDismiss: () -> Unit, onSend: (String) -> Unit) {
 fun SettingsDialog(
     currentSettings: AppSettings,
     onDismiss: () -> Unit,
-    onSave: (AppSettings) -> Unit
+    onSave: (AppSettings) -> Unit,
+    onReinstallAgent: () -> Unit
 ) {
     // ダイアログ内のローカルステート（キャンセルされたら破棄するため）
     var autoOpen by remember { mutableStateOf(currentSettings.autoOpenLogcat) }
@@ -608,19 +588,27 @@ fun SettingsDialog(
                 Spacer(Modifier.height(24.dp))
 
                 // アクションボタン
-                Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                    TextButton(onClick = onDismiss) {
-                        Text("Cancel", color = Color.Gray)
+                Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                    TextButton(onClick = {
+                        onReinstallAgent()
+                        onDismiss()
+                    }) {
+                        Text("Reinstall Agent", color = Color(0xFF569CD6))
                     }
-                    Spacer(Modifier.width(8.dp))
-                    Button(
-                        onClick = {
-                            val newSize = bufferSizeText.toIntOrNull()?.coerceAtLeast(100) ?: 2000
-                            onSave(AppSettings(autoOpen, newSize))
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF569CD6))
-                    ) {
-                        Text("Save")
+                    Row {
+                        TextButton(onClick = onDismiss) {
+                            Text("Cancel", color = Color.Gray)
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Button(
+                            onClick = {
+                                val newSize = bufferSizeText.toIntOrNull()?.coerceAtLeast(100) ?: 2000
+                                onSave(AppSettings(autoOpen, newSize))
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF569CD6))
+                        ) {
+                            Text("Save")
+                        }
                     }
                 }
             }

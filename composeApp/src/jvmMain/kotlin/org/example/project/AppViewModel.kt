@@ -28,6 +28,14 @@ import org.example.project.junit.JUnitTestRunner
 import org.example.project.tools.LogRecorder
 import org.example.project.tools.LogcatParser
 import org.example.project.tools.ProcessNameResolver
+import org.example.project.model.UiNode
+import org.example.project.model.DumpResult
+import com.google.gson.Gson
+import com.google.gson.JsonSyntaxException
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.toComposeImageBitmap
+import org.jetbrains.skia.Image
+import java.util.Base64
 
 
 data class AppSettings(
@@ -50,6 +58,15 @@ class AppViewModel : ViewModel() {
 
     private val _logcatFilter = MutableStateFlow("")
     val logcatFilter = _logcatFilter.asStateFlow()
+
+    private val _uiDumpRoot = MutableStateFlow<UiNode?>(null)
+    val uiDumpRoot = _uiDumpRoot.asStateFlow()
+
+    private val _uiDumpScreenshot = MutableStateFlow<ImageBitmap?>(null)
+    val uiDumpScreenshot = _uiDumpScreenshot.asStateFlow()
+
+    private val _selectedToolWindowTab = MutableStateFlow(0) // 0: Logcat, 1: UI Inspector
+    val selectedToolWindowTab = _selectedToolWindowTab.asStateFlow()
 
     private val _testPlugins = mutableStateListOf<TestPlugin>()
     val testPlugins: List<TestPlugin> get() = _testPlugins
@@ -374,7 +391,10 @@ class AppViewModel : ViewModel() {
 
     fun closeLogcatWindow() {
         _isLogcatWindowOpen.value = false
-        stopLogcat()
+    }
+
+    fun setToolWindowTab(index: Int) {
+        _selectedToolWindowTab.value = index
     }
 
     fun startLogcat() {
@@ -476,14 +496,56 @@ class AppViewModel : ViewModel() {
         logRecorder.close()
     }
 
-    fun connectAndPingAgent() {
+    fun setupMuttonAgent() {
         viewModelScope.launch {
-            // 1. Deploy, start & forward
-            adbObserver.setupMuttonAgent()
-            // 2. Wait a bit then Ping (wait for process to start)
-            delay(1000)
-            // 3. Check connectivity
+            adbObserver.setupMuttonAgent(forceInstall = false)
+        }
+    }
+
+    fun reinstallMuttonAgent() {
+        viewModelScope.launch {
+            adbObserver.setupMuttonAgent(forceInstall = true)
+        }
+    }
+
+    fun pingMuttonAgent() {
+        viewModelScope.launch {
             adbObserver.pingMuttonAgent()
+        }
+    }
+
+    fun dumpMuttonAgent() {
+        viewModelScope.launch {
+            val response = adbObserver.dumpMuttonAgent()
+            if (response != null && response.isNotEmpty()) {
+                try {
+                    val gson = Gson()
+                    val dumpResult = gson.fromJson(response, DumpResult::class.java)
+                    if (dumpResult != null && dumpResult.status == "ok") {
+                        val uiNode = gson.fromJson(dumpResult.output, UiNode::class.java)
+                        _uiDumpRoot.value = uiNode
+                        
+                        if (dumpResult.screenshot != null && dumpResult.screenshot.isNotEmpty()) {
+                            try {
+                                val bytes = Base64.getDecoder().decode(dumpResult.screenshot)
+                                val skiaImage = Image.makeFromEncoded(bytes)
+                                _uiDumpScreenshot.value = skiaImage.toComposeImageBitmap()
+                            } catch (e: Exception) {
+                                log("SYSTEM", "Failed to decode screenshot: ${e.message}", LogLevel.ERROR)
+                                _uiDumpScreenshot.value = null
+                            }
+                        } else {
+                            _uiDumpScreenshot.value = null
+                        }
+
+                        // Auto-open tool window and switch to UI Inspector tab
+                        openLogcatWindow()
+                        setToolWindowTab(1)
+                    }
+                } catch (e: Exception) {
+                    log("SYSTEM", "Failed to parse Dump JSON: \${e.message}", LogLevel.ERROR)
+                }
+            }
         }
     }
 

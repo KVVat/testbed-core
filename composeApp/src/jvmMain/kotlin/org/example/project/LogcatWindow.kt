@@ -17,10 +17,11 @@ import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.material3.*
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Notes
+import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.ViewHeadline
-import androidx.compose.material.icons.outlined.ViewList
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,6 +49,9 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
     val appSettings by viewModel.appSettings.collectAsState()
     val logcatLines = viewModel.logcatLines
     val logcatFilter by viewModel.logcatFilter.collectAsState()
+    val selectedTab by viewModel.selectedToolWindowTab.collectAsState()
+    val uiDumpRoot by viewModel.uiDumpRoot.collectAsState()
+    val uiDumpScreenshot by viewModel.uiDumpScreenshot.collectAsState()
 
     // UI状態
     var isCompactMode by remember { mutableStateOf(false) } // Compact vs Standard
@@ -92,51 +96,67 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
                 ) {
                     Spacer(Modifier.height(16.dp))
 
-                    // 1. Play/Pause
-                    TooltipIconButton(
-                        icon = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                        tooltip = if (isPaused) "Resume" else "Pause",
-                        tint = if (isPaused) Color(0xFFFFC66D) else Color.White,
-                        onClick = { isPaused = !isPaused }
-                    )
-
                     Spacer(Modifier.height(16.dp))
 
-                    // 2. Clear
-                    TooltipIconButton(
-                        icon = Icons.Default.DeleteSweep,
-                        tooltip = "Clear Log",
-                        onClick = { viewModel.clearLogcat() }
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    TooltipIconButton(
-                        // アイコンは「行」をイメージさせる Notes などを採用
-                        icon = Icons.Default.Notes,
-                        tooltip = if (isSoftWrap) "Disable Word Wrap" else "Enable Word Wrap",
-                        // ONのときは青色などで強調
-                        tint = if (isSoftWrap) Color(0xFF569CD6) else Color.White,
-                        onClick = { isSoftWrap = !isSoftWrap }
-                    )
-                    Spacer(Modifier.height(16.dp))
+                    if (selectedTab == 0) {
+                        // 1. Play/Pause
+                        TooltipIconButton(
+                            icon = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                            tooltip = if (isPaused) "Resume" else "Pause",
+                            tint = if (isPaused) Color(0xFFFFC66D) else Color.White,
+                            onClick = { isPaused = !isPaused }
+                        )
 
-                    TooltipIconButton(
-                        // ★ アイコンを変更 (Defaultにある確実なものへ)
-                        icon = if (isCompactMode) Icons.Default.ViewHeadline else Icons.Default.ViewList,
-                        tooltip = if (isCompactMode) "Standard View" else "Compact View",
-                        tint = if (isCompactMode) Color(0xFF569CD6) else Color.White,
-                        onClick = { isCompactMode = !isCompactMode }
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    TooltipIconButton(onClick = {
-                        val textToCopy = filteredLogs.joinToString("\n") {log->
-                            "${log.timestamp} ${log.pid}/${log.tag} ${log.level.name}: ${log.message}"
-                        }
-                        clipboardManager.setText(AnnotatedString(textToCopy))
-                        } ,
-                        tooltip =  "Copy Shown Logs",
-                        tint = Color.Gray,
-                        icon = Icons.Default.ContentCopy
-                    )
+                        Spacer(Modifier.height(16.dp))
+
+                        // 2. Clear
+                        TooltipIconButton(
+                            icon = Icons.Default.DeleteSweep,
+                            tooltip = "Clear Log",
+                            onClick = { viewModel.clearLogcat() }
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        TooltipIconButton(
+                            icon = Icons.AutoMirrored.Filled.Notes,
+                            tooltip = if (isSoftWrap) "Disable Word Wrap" else "Enable Word Wrap",
+                            tint = if (isSoftWrap) Color(0xFF569CD6) else Color.White,
+                            onClick = { isSoftWrap = !isSoftWrap }
+                        )
+                        Spacer(Modifier.height(16.dp))
+
+                        TooltipIconButton(
+                            icon = if (isCompactMode) Icons.Default.ViewHeadline else Icons.AutoMirrored.Filled.ViewList,
+                            tooltip = if (isCompactMode) "Standard View" else "Compact View",
+                            tint = if (isCompactMode) Color(0xFF569CD6) else Color.White,
+                            onClick = { isCompactMode = !isCompactMode }
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        TooltipIconButton(onClick = {
+                            val textToCopy = filteredLogs.joinToString("\n") {log->
+                                "${log.timestamp} ${log.pid}/${log.tag} ${log.level.name}: ${log.message}"
+                            }
+                            clipboardManager.setText(AnnotatedString(textToCopy))
+                            } ,
+                            tooltip =  "Copy Shown Logs",
+                            tint = Color.Gray,
+                            icon = Icons.Default.ContentCopy
+                        )
+                    } else {
+                        // UI Inspector Tools
+                        TooltipIconButton(
+                            icon = Icons.Default.CellTower,
+                            tooltip = "Ping Agent",
+                            tint = Color(0xFF569CD6),
+                            onClick = { viewModel.pingMuttonAgent() }
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        TooltipIconButton(
+                            icon = Icons.Default.AccountTree,
+                            tooltip = "Dump UI Tree",
+                            tint = Color(0xFFFFC66D),
+                            onClick = { viewModel.dumpMuttonAgent() }
+                        )
+                    }
 
                     Spacer(Modifier.weight(1f)) // 下詰め
 
@@ -153,9 +173,34 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
 
                 // --- 右側: メインコンテンツ ---
                 Column(modifier = Modifier.weight(1f)) {
+                    
+                    // タブエリア
+                    TabRow(
+                        selectedTabIndex = selectedTab,
+                        containerColor = Color(0xFF2B2D30),
+                        contentColor = Color.White,
+                        indicator = { tabPositions ->
+                            TabRowDefaults.Indicator(
+                                modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
+                                color = Color(0xFF569CD6)
+                            )
+                        }
+                    ) {
+                        Tab(
+                            selected = selectedTab == 0,
+                            onClick = { viewModel.setToolWindowTab(0) },
+                            text = { Text("Logcat") }
+                        )
+                        Tab(
+                            selected = selectedTab == 1,
+                            onClick = { viewModel.setToolWindowTab(1) },
+                            text = { Text("UI Inspector") }
+                        )
+                    }
 
-                    // 上部: フィルタリングバー
-                    LogcatTopBar(
+                    if (selectedTab == 0) {
+                        // 上部: フィルタリングバー
+                        LogcatTopBar(
                         filterText = logcatFilter,
                         onFilterChange = { viewModel.updateLogcatFilter(it) },
                         selectedLevels = selectedLevels,
@@ -202,12 +247,16 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
                         )
                     }
 
-                    // フッター (ステータスバー)
-                    LogcatFooter(
-                        currentCount = logcatLines.size,
-                        maxCount = appSettings.logcatBufferSize,
-                        filteredCount = filteredLogs.size
-                    )
+                        // フッター (ステータスバー)
+                        LogcatFooter(
+                            currentCount = logcatLines.size,
+                            maxCount = appSettings.logcatBufferSize,
+                            filteredCount = filteredLogs.size
+                        )
+                    } else {
+                        // UI Inspector ツール
+                        UiInspectorPane(rootNode = uiDumpRoot, screenshot = uiDumpScreenshot)
+                    }
                 }
             }
         }

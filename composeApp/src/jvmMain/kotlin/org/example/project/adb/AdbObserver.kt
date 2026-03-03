@@ -40,8 +40,8 @@ class AdbObserver(private val viewModel: AppViewModel) {
     private var logcatJob: Job? = null
 
     // Mutton Agentの設定
-    private val AGENT_JAR_NAME = "mutton-agent.jar"
-    private val REMOTE_AGENT_PATH = "/data/local/tmp/$AGENT_JAR_NAME"
+    private val AGENT_APK_NAME = "mutton-agent.apk"
+    private val REMOTE_AGENT_PATH = "/data/local/tmp/$AGENT_APK_NAME"
     // エージェント側で定義するソケット名 (Abstract Unix Domain Socket)
     private val AGENT_SOCKET_NAME = "mutton_agent"
     private val LOCAL_FORWARD_PORT = 11451
@@ -249,7 +249,7 @@ class AdbObserver(private val viewModel: AppViewModel) {
     }
 
     // ★ Mutton Agentのデプロイと起動
-    suspend fun setupMuttonAgent() {
+    suspend fun setupMuttonAgent(forceInstall: Boolean = false) {
         if (!viewModel.uiState.value.adbIsValid) return
 
         withContext(Dispatchers.IO) {
@@ -257,64 +257,124 @@ class AdbObserver(private val viewModel: AppViewModel) {
                 val serial = adb.deviceSerial
                 viewModel.log("Agent", "Initializing Mutton Agent...", LogLevel.INFO)
 
-                // 1. ローカルJARの特定 (JUnitBridge.resourceDirを使用)
-                // composeResources/mutton-agent.jar はビルド後、resources に配置される想定
-                val localJar = File(JUnitBridge.resourceDir, "$AGENT_JAR_NAME")
+                // 1. ローカルAPKの特定 (JUnitBridge.resourceDirを使用)
+                // composeResources/mutton-agent.apk はビルド後、resources に配置される想定
+                val localApk = File(JUnitBridge.resourceDir, "$AGENT_APK_NAME")
 
-                if (!localJar.exists()) {
-                    viewModel.log("Agent", "Agent Jar not found at: ${localJar.absolutePath}. Did you run :makeAgentJar?", LogLevel.ERROR)
+                if (!localApk.exists()) {
+                    viewModel.log("Agent", "Agent APK not found at: ${localApk.absolutePath}. Did you build the APK?", LogLevel.ERROR)
                     return@withContext
                 }
 
-                // 2. 既存プロセスのクリーンアップ
-                // "pkill" は一部のAndroidバージョンで使えないため、killallやps grepを使用
-                // ここでは簡易的に pkill を試みる (失敗しても次へ)
-                try {
-                    adb.adb.execute(ShellCommandRequest("pkill -f $AGENT_JAR_NAME"), serial)
-                } catch (_: Exception) {}
-
-                // 3. JARのプッシュ
-                viewModel.log("Agent", "Pushing agent to device...", LogLevel.INFO)
-                val pushChannel = adb.adb.execute(
-                    PushFileRequest(localJar, REMOTE_AGENT_PATH),
-                    this,
-                    serial
-                )
-                // 完了待ち
-                for (progress in pushChannel) {
-                    // プログレス表示が必要ならここで
-                }
-                viewModel.log("Agent", "Agent pushed successfully.", LogLevel.PASS)
-
-                // 4. ポートフォワード設定
+                // 2. ポートフォワード設定
                 // PC: LOCAL_FORWARD_PORT -> Android: abstract socket "mutton_agent"
                 viewModel.log("Agent", "Setting up port forwarding (tcp:$LOCAL_FORWARD_PORT -> localabstract:$AGENT_SOCKET_NAME)...", LogLevel.INFO)
-
-                adb.adb.execute(
-                    PortForwardRequest(
-                        // PC側: TCPポート 11451
-                        local = LocalTcpPortSpec(LOCAL_FORWARD_PORT),
-                        remote = RemoteAbstractPortSpec(AGENT_SOCKET_NAME),
-                        serial = serial
+                try {
+                    adb.adb.execute(
+                        PortForwardRequest(
+                            // PC側: TCPポート 11451
+                            local = LocalTcpPortSpec(LOCAL_FORWARD_PORT),
+                            remote = RemoteAbstractPortSpec(AGENT_SOCKET_NAME),
+                            serial = serial
+                        )
                     )
-                )
+                } catch (e: Exception) {
+                    viewModel.log("Agent", "Port forwarding failed: ${e.message}", LogLevel.WARN)
+                }
 
-
-                // 5. エージェントの起動 (app_process)
-                // バックグラウンドで実行し続けるため、コマンドを投げるだけにするか、コルーチンで監視する
-                viewModel.log("Agent", "Starting agent process...", LogLevel.INFO)
-                viewModel.viewModelScope.launch(Dispatchers.IO) {
-                    try {
-                        // CLASSPATHを設定して app_process を起動。エントリポイントは org.example.agent.Main
-                        val cmd = "CLASSPATH=$REMOTE_AGENT_PATH app_process / org.example.mutton.Main"
-                        adb.adb.execute(ShellCommandRequest(cmd), serial)
-                    } catch (e: Exception) {
-                        // プロセスが終了した場合やエラー時
-                        viewModel.log("Agent", "Agent process terminated: ${e.message}", LogLevel.WARN)
+                // 3. すでにエージェントプロセスが動作しているかサイレントにチェック
+                // ホストアプリ再起動時に毎回 `am force-stop` を実行すると、Agent(Android Test)側の
+                // UiAutomation (Accessibility Service等) の接続状態が壊れ、以降 `rootInActiveWindow` 等が
+                // null を返す問題(Bug)が発生するため、ここでプロセスが生存していればキル・再配置をスキップします。
+                var isAgentRunning = false
+                if (!forceInstall) {
+                    // Port forwarding might take a moment to be fully active. Retry a few times.
+                    viewModel.log("Agent", "Pinging agent to check if already running...", LogLevel.INFO)
+                    for (i in 1..5) {
+                        val pingResponse = sendToAgent("{\"command\":\"ping\"}", silent = false) // Removed silent to get error logs
+                        if (pingResponse != null && pingResponse.contains("\"status\":\"ok\"")) {
+                            viewModel.log("Agent", "Agent is already running. Skipping deployment to preserve UiAutomation state.", LogLevel.PASS)
+                            isAgentRunning = true
+                            break
+                        }
+                        delay(500) // Wait longer before retrying (total 2.5s)
                     }
                 }
 
-                viewModel.log("Agent", "Agent start command issued.", LogLevel.PASS)
+                if (!isAgentRunning) {
+
+                // 4. 既存プロセスのクリーンアップ
+                try {
+                    adb.adb.execute(ShellCommandRequest("am force-stop org.example.mutton.test"), serial)
+                } catch (_: Exception) {}
+
+                // ★ 追加： インストール済みかチェックしてスキップ
+                val isInstalled = try {
+                    val pmCheck = adb.adb.execute(ShellCommandRequest("pm list packages org.example.mutton.test"), serial)
+                    pmCheck.output.contains("package:org.example.mutton.test")
+                } catch (_: Exception) { false }
+
+                if (isInstalled && !forceInstall) {
+                    viewModel.log("Agent", "Agent APK is already installed. Skipping push and install.", LogLevel.INFO)
+                } else {
+                    // 3. APKのプッシュ
+                    viewModel.log("Agent", "Pushing agent APK to device...", LogLevel.INFO)
+                    val pushChannel = adb.adb.execute(
+                        PushFileRequest(localApk, REMOTE_AGENT_PATH),
+                        this,
+                        serial
+                    )
+                    // 完了待ち
+                    for (progress in pushChannel) {
+                        // プログレス表示が必要ならここで
+                    }
+                    viewModel.log("Agent", "Agent pushed successfully.", LogLevel.PASS)
+
+                    // 3.5 APKのインストール
+                    viewModel.log("Agent", "Installing agent APK...", LogLevel.INFO)
+                    val installResult = adb.adb.execute(ShellCommandRequest("pm install -r -t $REMOTE_AGENT_PATH"), serial)
+                    if (installResult.output.contains("Success")) {
+                        viewModel.log("Agent", "Agent installed successfully.", LogLevel.PASS)
+                    } else {
+                        viewModel.log("Agent", "Agent installation failed: ${installResult.output}", LogLevel.ERROR)
+                    }
+                }
+
+                    // 5. エージェントの起動 (am instrument)
+                    // バックグラウンドで実行し続けるため、コルーチンで監視する
+                    viewModel.log("Agent", "Starting agent process...", LogLevel.INFO)
+                    viewModel.viewModelScope.launch(Dispatchers.IO) {
+                        try {
+                            // am instrument で androidx.test.runner.AndroidJUnitRunner を起動
+                            val cmd = "am instrument -w org.example.mutton.test/androidx.test.runner.AndroidJUnitRunner"
+                            adb.adb.execute(ShellCommandRequest(cmd), serial)
+                        } catch (e: Exception) {
+                            // プロセスが終了した場合やエラー時
+                            viewModel.log("Agent", "Agent process terminated or failed: ${e.message}", LogLevel.WARN)
+                        }
+                    }
+
+                    viewModel.log("Agent", "Agent start command issued.", LogLevel.PASS)
+                }
+
+                // Wait for the agent to boot up and be ready if we just started it
+                if (!isAgentRunning) {
+                    viewModel.log("Agent", "Waiting for agent to become responsive...", LogLevel.INFO)
+                    var responsive = false
+                    for (i in 1..20) { // Up to 5 seconds
+                        val pingResponse = sendToAgent("{\"command\":\"ping\"}", silent = true)
+                        if (pingResponse != null && pingResponse.contains("\"status\":\"ok\"")) {
+                            responsive = true
+                            break
+                        }
+                        delay(250)
+                    }
+                    if (responsive) {
+                        viewModel.log("Agent", "Agent is now responsive and ready.", LogLevel.PASS)
+                    } else {
+                        viewModel.log("Agent", "Agent failed to respond after starting. Check Logcat for agent crashes.", LogLevel.ERROR)
+                    }
+                }
 
             } catch (e: Exception) {
                 viewModel.log("Agent", "Setup failed: ${e.message}", LogLevel.ERROR)
@@ -419,40 +479,67 @@ class AdbObserver(private val viewModel: AppViewModel) {
             }
         }
     }
-    suspend fun pingMuttonAgent() {
-        if (!viewModel.uiState.value.adbIsValid) return
+    private suspend fun sendToAgent(jsonCmd: String, silent: Boolean = false): String? {
+        if (!viewModel.uiState.value.adbIsValid) return null
 
-        withContext(Dispatchers.IO) {
+        return withContext(Dispatchers.IO) {
             try {
-                viewModel.log("Agent", "Pinging agent at 127.0.0.1:$LOCAL_FORWARD_PORT...", LogLevel.INFO)
-
-                // 単純なSocket通信でJSONを投げつける
                 java.net.Socket("127.0.0.1", LOCAL_FORWARD_PORT).use { socket ->
-                    // タイムアウト設定 (詰まると嫌なので)
-                    socket.soTimeout = 2000
+                    socket.soTimeout = 5000 // dump can take longer
 
                     val writer = java.io.PrintWriter(socket.getOutputStream(), true)
                     val reader = java.io.BufferedReader(java.io.InputStreamReader(socket.getInputStream()))
 
-                    // Pingコマンド送信
-                    // エージェント側が改行区切りのJSONを待ってると想定
-                    val jsonCmd = "{\"cmd\":\"ping\"}"
                     writer.println(jsonCmd)
 
-                    // レスポンス受信
+                    // The agent returns a single line JSON response per command.
+                    // Looping until null will block until socket closure/timeout.
                     val response = reader.readLine()
-
-                    if (response != null) {
-                        viewModel.log("Agent", "Response: $response", LogLevel.PASS)
-                        // ここで "pong" が返ってくるか判定してもOK
-                    } else {
-                        viewModel.log("Agent", "No response from agent.", LogLevel.WARN)
-                    }
+                    response?.trimEnd()
                 }
             } catch (e: Exception) {
-                viewModel.log("Agent", "Ping failed: ${e.message} (Is agent running?)", LogLevel.ERROR)
+                if (!silent) {
+                    viewModel.log("Agent", "Communication failed: ${e.message} (Is agent running?)", LogLevel.ERROR)
+                }
+                null
             }
         }
+    }
+
+    suspend fun pingMuttonAgent() {
+        viewModel.log("Agent", "Pinging agent at 127.0.0.1:$LOCAL_FORWARD_PORT...", LogLevel.INFO)
+        var response = sendToAgent("{\"cmd\":\"ping\"}", silent = true)
+        
+        if (response == null) {
+            viewModel.log("Agent", "Agent not responding. Attempting auto-setup...", LogLevel.INFO)
+            setupMuttonAgent(forceInstall = false)
+            response = sendToAgent("{\"cmd\":\"ping\"}")
+        }
+
+        if (response != null && response.isNotEmpty()) {
+            viewModel.log("Agent", "Response: $response", LogLevel.PASS)
+        } else {
+            viewModel.log("Agent", "No response from agent. Setup might have failed.", LogLevel.WARN)
+        }
+    }
+
+    suspend fun dumpMuttonAgent(): String? {
+        viewModel.log("Agent", "Requesting UI dump from agent...", LogLevel.INFO)
+        var response = sendToAgent("{\"cmd\":\"dump\"}", silent = true)
+        
+        if (response == null) {
+            viewModel.log("Agent", "Agent not responding. Attempting auto-setup...", LogLevel.INFO)
+            setupMuttonAgent(forceInstall = false)
+            response = sendToAgent("{\"cmd\":\"dump\"}")
+        }
+
+        if (response != null && response.isNotEmpty()) {
+            viewModel.log("Agent", "Dump Success! Output size: ${response.length} chars", LogLevel.PASS)
+            //viewModel.log("Agent Dump", response, LogLevel.DEBUG)
+        } else {
+            viewModel.log("Agent", "Dump failed or empty response. Setup might have failed.", LogLevel.WARN)
+        }
+        return response
     }
 
     suspend fun clearLogcatBuffer() {
