@@ -112,7 +112,8 @@ fun App() {
                         onHomeClick = { viewModel.pressHome() },
                         onSendText = { text -> viewModel.sendText(text) },
                         onScreenshotClick = { viewModel.captureScreenshot() },
-                        onMenuClick = { scope.launch { drawerState.open() } }
+                        onMenuClick = { scope.launch { drawerState.open() } },
+                        onSetupAgentClick = { viewModel.setupMuttonAgent() }
                     )
                 },
                 content = { padding ->
@@ -222,7 +223,8 @@ fun TopControlBar(
     onHomeClick: () -> Unit,
     onSendText: (String) -> Unit,
     onScreenshotClick: () -> Unit,
-    onMenuClick: () -> Unit
+    onMenuClick: () -> Unit,
+    onSetupAgentClick: () -> Unit
 ) {
     TopAppBar(
         colors = TopAppBarDefaults.topAppBarColors(
@@ -286,6 +288,24 @@ fun TopControlBar(
                         Icon(Icons.Default.Info, contentDescription = "Device Info", tint = deviceStatusColor, modifier = Modifier.size(16.dp))
                     }
                 }
+                Divider(Modifier.height(24.dp).width(1.dp).padding(horizontal = 8.dp), color = Color.Gray)
+
+                // ★追加: 羊（Mutton Agent）デプロイボタン
+                TooltipIconButton(
+                    onClick = onSetupAgentClick,
+                    tooltip = "Deploy Mutton Agent",
+                    enabled = adbConnected
+                ) {
+                    Icon(
+                        painter = painterResource(Res.drawable.ic_sheep),
+                        contentDescription = "Deploy Mutton Agent",
+                        tint = if (adbConnected) Color(0xFF569CD6) else Color.Gray,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                Spacer(Modifier.width(8.dp))
+
                 if (isRunning) {
                     Spacer(Modifier.width(16.dp))
                     CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = Color(0xFF569CD6))
