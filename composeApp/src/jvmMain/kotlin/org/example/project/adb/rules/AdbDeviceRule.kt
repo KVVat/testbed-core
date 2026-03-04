@@ -14,6 +14,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assume
 import org.junit.rules.TestRule
@@ -160,6 +161,53 @@ class AdbDeviceRule(val deviceType: DeviceType = DeviceType.ANY, vararg val requ
             }
         }
     }
+
+    /**
+    * 対象デバイスの再起動完了を安全に待機します。
+    * * @param timeoutMillis 最大待機時間 (デフォルト: 90秒)
+    */
+    suspend fun waitBoot(timeoutMillis: Long = 90_000L) {
+        // 自身のルールで保持しているデバイスシリアルを使用する
+        val serial = this.deviceSerial
+
+        withTimeout(timeoutMillis) {
+            while (isActive) {
+                try {
+                    // 1. デバイスがオンラインリストに復帰しているか確認
+                    val devices = adb.execute(ListDevicesRequest())
+                    val targetDevice = devices.find { it.serial == serial }
+
+                    if (targetDevice != null) {
+                        // 2. sys.boot_completed が "1" になっているか確認
+                        val bootCompleted = adb.execute(
+                            GetSinglePropRequest("sys.boot_completed"),
+                            serial
+                        ).trim()
+
+                        if (bootCompleted == "1") {
+                            // 3. (オプション) パッケージマネージャ等の準備が完了しているか念押しで確認
+                            // BFU(Before First Unlock)状態でも PM は応答するため、これがあるとより確実です
+                            val pmCheck = adb.execute(
+                                ShellCommandRequest("pm path android"),
+                                serial
+                            ).output
+
+                            if (pmCheck.isNotBlank()) {
+                                // 完全にブート完了と判定
+                                return@withTimeout
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    // adbのコネクション切断例外（再起動直後など）は握り潰してリトライ
+                }
+
+                // 2秒待ってから再チェック (CPU負荷を下げる)
+                delay(2000L)
+            }
+        }
+    }
+    /*
     suspend fun waitBoot(){
         runBlocking {
 
@@ -189,5 +237,5 @@ class AdbDeviceRule(val deviceType: DeviceType = DeviceType.ANY, vararg val requ
                 }
             }
         }
-    }
+    }*/
 }
