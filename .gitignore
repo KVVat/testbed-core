@@ -21,6 +21,9 @@ local.properties
 *.log.4
 *.log.5
 
+# kotlins
+./kotlin
+
 
 # Java class files
 *.class

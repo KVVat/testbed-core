@@ -73,6 +73,7 @@ class AppViewModel : ViewModel() {
 
     private val adbObserver = AdbObserver(this)
     private val fastbootClient = FastbootClient()
+    private val mcpServer = org.example.project.mcp.McpSseServer(adbObserver)
 
     private val logRecorder = LogRecorder(baseFileName = "logcat.log")
     private val PLUGINS_DIR = File("plugins")
@@ -84,6 +85,7 @@ class AppViewModel : ViewModel() {
     init {
         loadSettings()
         startAdbObservation()
+        mcpServer.start()
         JUnitBridge.logging = { message, level ->
             val internalLevel = when (level) {
                 TestLogLevel.DEBUG -> LogLevel.DEBUG
@@ -423,6 +425,14 @@ class AppViewModel : ViewModel() {
         viewModelScope.launch { adbObserver.sendText(text) }
     }
 
+    fun startScreenshotStream() {
+        viewModelScope.launch { adbObserver.startScreenshotStream() }
+    }
+
+    fun stopScreenshotStream() {
+        viewModelScope.launch { adbObserver.stopScreenshotStream() }
+    }
+
     fun clearAppData() {
         viewModelScope.launch { adbObserver.clearAppData("org.example.project") }
     }
@@ -494,6 +504,7 @@ class AppViewModel : ViewModel() {
     override fun onCleared() {
         super.onCleared()
         logRecorder.close()
+        mcpServer.stop()
     }
 
     fun setupMuttonAgent() {

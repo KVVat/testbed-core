@@ -13,7 +13,10 @@
 | **3. System**<br>(システム・ADB) | `set_device_lock` | デバイスの画面ロック（PIN）を設定または解除します。 | `pin` : string / **必須** / -<br>設定するPINコード。空文字（`""`）でクリア。 | 設定の成否を示すテキストメッセージ |
 | **4. Observe**<br>(ログ・状態観測) | `clear_logcat` | デバイスのLogcatバッファをクリア（`adb logcat -c`）します。 | (なし) | 成功を示すメッセージ |
 | **4. Observe**<br>(ログ・状態観測) | `get_logcat` | フィルタリングされたLogcatを取得します。（トークン節約のため必須） | `tags` : string[] / 任意 / `[]`<br>取得対象のログタグの配列<br><br>`level` : string / 任意 / `"I"`<br>最小ログレベル（`V`, `D`, `I`, `W`, `E`, `F`）<br><br>`grep_pattern` : string / 任意 / `""`<br>ログを絞り込む正規表現<br><br>`max_lines` : int / 任意 / `100`<br>取得する最大行数 | 条件に合致したログのプレーンテキスト |
-| **5. Test Control**<br>(テスト制御) | `execute_test` | Testbed上で特定のテストクラスまたはメソッドをコンパイル・実行します。 | `class_name` : string / **必須** / -<br>実行するテストクラスの完全修飾名<br><br>`method_name` : string / 任意 / -<br>特定のメソッドのみ実行する場合に指定 | `status` (Pass/Fail/Error)、`stacktrace`、および `assertion_msg` を含むJSON |
+| **5. Test Control**<br>(テスト制御) | `junit_test_reload` | プラグイン開発側でコンパイルし `resource` ディレクトリに投入したテストJarをリロードして読み直します。 | (なし) | 読み込みに成功したJarやクラスのステータス情報 |
+| **5. Test Control**<br>(テスト制御) | `junit_test_list` | リロードして読み込まれた実行可能なテストの一覧を取得します。 | (なし) | 実行可能なテストクラス・メソッドのリストを含むJSON |
+| **5. Test Control**<br>(テスト制御) | `junit_test_execute` | 指定したテストクラスまたはメソッドの実行を開始します。結果はバックグラウンドでストリーム出力されます。 | `class_name` : string / **必須** / -<br>実行するテストクラスの完全修飾名<br><br>`method_name` : string / 任意 / -<br>特定のメソッドのみ実行する場合に指定 | テストの実行開始ステータス |
+| **5. Test Control**<br>(テスト制御) | `junit_test_receive` | `junit_test_execute` で開始したテストの結果をストリームで待機し、受付終了信号まで出力を受け付けます。 | (なし) | `status` (Pass/Fail/Error)、`stacktrace`、および `assertion_msg` などを逐次または最終結果として含むレスポンス |
 | **6. Health**<br>(環境・ヘルス) | `check_testbed_health` | Testbed基盤（ADB、Agent、ビルド環境）が正常に動作しているか一括で自己診断します。 | (なし) | `adb_status`, `agent_status`, `plugin_status` などの診断結果を含むJSON |
 | **6. Health**<br>(環境・ヘルス) | `list_test_resources` | `resource` ディレクトリに存在するファイル（APKや設定ファイルなど）の一覧を取得します。 | `filter_extension` : string / 任意 / `""`<br>拡張子での絞り込み（例: `".apk"`） | ファイル名のリストを含むJSON |
 

@@ -113,7 +113,9 @@ fun App() {
                         onSendText = { text -> viewModel.sendText(text) },
                         onScreenshotClick = { viewModel.captureScreenshot() },
                         onMenuClick = { scope.launch { drawerState.open() } },
-                        onSetupAgentClick = { viewModel.setupMuttonAgent() }
+                        onSetupAgentClick = { viewModel.setupMuttonAgent() },
+                        onStartStream = { viewModel.startScreenshotStream() },
+                        onStopStream = { viewModel.stopScreenshotStream() }
                     )
                 },
                 content = { padding ->
@@ -224,7 +226,9 @@ fun TopControlBar(
     onSendText: (String) -> Unit,
     onScreenshotClick: () -> Unit,
     onMenuClick: () -> Unit,
-    onSetupAgentClick: () -> Unit
+    onSetupAgentClick: () -> Unit,
+    onStartStream: () -> Unit,
+    onStopStream: () -> Unit
 ) {
     TopAppBar(
         colors = TopAppBarDefaults.topAppBarColors(
@@ -303,6 +307,11 @@ fun TopControlBar(
                         modifier = Modifier.size(24.dp)
                     )
                 }
+
+                Spacer(Modifier.width(8.dp))
+                // DEV TEST: Start/Stop Stream
+                TextButton(onClick = onStartStream) { Text("Start", color = Color(0xFF569CD6)) }
+                TextButton(onClick = onStopStream) { Text("Stop", color = Color(0xFFFF6B68)) }
 
                 Spacer(Modifier.width(8.dp))
 

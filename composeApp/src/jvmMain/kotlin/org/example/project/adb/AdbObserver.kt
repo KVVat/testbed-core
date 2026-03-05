@@ -30,14 +30,25 @@ import org.example.project.LogLevel
 import org.example.project.adb.rules.AdbDeviceRule
 import org.example.project.tools.ProcessNameResolver
 import java.io.File
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.io.PrintWriter
+import java.net.Socket
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 
 class AdbObserver(private val viewModel: AppViewModel) {
 
     var adb: AdbDeviceRule = AdbDeviceRule()
     var adbProps: AdbProps = AdbProps()
     private var logcatJob: Job? = null
+    
+    // Agent Streams
+    private var screenshotStreamJob: Job? = null
+    private val _screenshotStream = MutableSharedFlow<String>(extraBufferCapacity = 10)
+    val screenshotStream = _screenshotStream.asSharedFlow()
 
     // Mutton Agentの設定
     private val AGENT_APK_NAME = "mutton-agent.apk"
@@ -506,6 +517,45 @@ class AdbObserver(private val viewModel: AppViewModel) {
         }
     }
 
+    suspend fun startScreenshotStream(fps: Float = 1f) {
+        if (!viewModel.uiState.value.adbIsValid) return
+        if (screenshotStreamJob?.isActive == true) return
+
+        viewModel.log("Agent", "Starting screenshot stream at $fps fps...", LogLevel.INFO)
+        val jsonCmd = "{\"cmd\":\"start_stream\",\"fps\":$fps}"
+        
+        screenshotStreamJob = viewModel.viewModelScope.launch(Dispatchers.IO) {
+            try {
+                Socket("127.0.0.1", LOCAL_FORWARD_PORT).use { socket ->
+                    socket.soTimeout = 0 // Stream is long-lived
+
+                    val writer = PrintWriter(socket.getOutputStream(), true)
+                    val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
+
+                    writer.println(jsonCmd)
+
+                    while (isActive) {
+                        val line = reader.readLine() ?: break
+                        if (line.isNotBlank()) {
+                            _screenshotStream.tryEmit(line.trimEnd())
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                if (e !is kotlinx.coroutines.CancellationException) {
+                    viewModel.log("Agent", "Screenshot stream failed: ${e.message}", LogLevel.ERROR)
+                }
+            }
+        }
+    }
+
+    suspend fun stopScreenshotStream() {
+        screenshotStreamJob?.cancel()
+        screenshotStreamJob = null
+        sendToAgent("{\"cmd\":\"stop_stream\"}", silent = true)
+        viewModel.log("Agent", "Screenshot stream stopped.", LogLevel.INFO)
+    }
+
     suspend fun pingMuttonAgent() {
         viewModel.log("Agent", "Pinging agent at 127.0.0.1:$LOCAL_FORWARD_PORT...", LogLevel.INFO)
         var response = sendToAgent("{\"cmd\":\"ping\"}", silent = true)
@@ -545,5 +595,28 @@ class AdbObserver(private val viewModel: AppViewModel) {
     suspend fun clearLogcatBuffer() {
         if (!viewModel.uiState.value.adbIsValid) return
         withContext(Dispatchers.IO) { adb.adb.execute(ShellCommandRequest("logcat -c"), adb.deviceSerial) }
+    }
+
+    suspend fun getDeviceInfo(): String {
+        if (!viewModel.uiState.value.adbIsValid) return "{}"
+        return withContext(Dispatchers.IO) {
+            try {
+                val serial = adb.deviceSerial
+                val model = adb.adb.execute(ShellCommandRequest("getprop ro.product.model"), serial).output.trim()
+                val osVersion = adb.adb.execute(ShellCommandRequest("getprop ro.build.version.sdk"), serial).output.trim()
+                val abi = adb.adb.execute(ShellCommandRequest("getprop ro.product.cpu.abi"), serial).output.trim()
+                val screenSize = adb.adb.execute(ShellCommandRequest("wm size"), serial).output.trim().replace("Physical size: ", "")
+                
+                val json = com.google.gson.JsonObject()
+                json.addProperty("model", model)
+                json.addProperty("os_version", osVersion)
+                json.addProperty("abi", abi)
+                json.addProperty("screen_size", screenSize)
+                json.toString()
+            } catch (e: Exception) {
+                viewModel.log("ADB", "Failed to get device info: ${e.message}", LogLevel.ERROR)
+                "{}"
+            }
+        }
     }
 }
