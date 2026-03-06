@@ -41,7 +41,7 @@ import org.example.project.adb.AdbObserver
 class McpSseServer(private val adbObserver: AdbObserver) {
 
 private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
-fun configureServer(): Server {
+    fun configureServer(): Server {
         val mcpServer = Server(
             Implementation(
                 name = "testbed-core",
