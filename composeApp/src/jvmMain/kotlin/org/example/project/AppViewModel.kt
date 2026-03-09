@@ -34,6 +34,7 @@ import com.google.gson.Gson
 import com.google.gson.JsonSyntaxException
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
+import com.android.certifications.junit.UnitTestingTextListener
 import org.jetbrains.skia.Image
 import java.util.Base64
 
@@ -280,7 +281,13 @@ class AppViewModel : ViewModel() {
     }
 
     fun logging(message: String) {
-        log("JUnit", message, LogLevel.DEBUG)
+        val level = when {
+            message.contains("failed") || message.contains("Exception") -> LogLevel.ERROR
+            message.contains("[SKIPPED REASON]") || message.contains("skipped") -> LogLevel.WARN
+            message.contains("passed") -> LogLevel.PASS
+            else -> LogLevel.DEBUG
+        }
+        log("JUnit", message, level)
     }
 
     private fun output_path(): String {
@@ -324,6 +331,9 @@ class AppViewModel : ViewModel() {
 
                 try {
                     val runner = JUnitTestRunner(arrayOf(targetClass), antRunner)
+
+                    runner.addListener(UnitTestingTextListener(::logging){})
+
                     runner.start()
                 } finally {
                     Thread.currentThread().contextClassLoader = originalClassLoader

@@ -42,13 +42,16 @@ class AdbDeviceRule(val deviceType: DeviceType = DeviceType.ANY, vararg val requ
     var isUnauthorized: Boolean = false
 
     val adb = AndroidDebugBridgeClientFactory().build()
-    val initTimeout: Duration = Duration.ofSeconds(10)
+    val initTimeout: Duration = Duration.ofSeconds(3)
     fun isDeviceInitialised() = ::deviceSerial.isInitialized
+
+
+
     override fun apply(base: Statement, description: Description): Statement {
         return object : Statement() {
             override fun evaluate() {
                 runBlocking {
-                    withTimeoutOrNull(initTimeout.toMillis()) {
+                    val success = withTimeoutOrNull(initTimeout.toMillis()) {
                         //First we start the adb if it is not running
                         startAdb()
 
@@ -56,7 +59,16 @@ class AdbDeviceRule(val deviceType: DeviceType = DeviceType.ANY, vararg val requ
                         //boot + supported features
                         val device = waitForDevice()
                         deviceSerial = device.serial
-                    } ?: throw RuntimeException("Timeout waiting for device")
+                        true
+                    }
+                    Assume.assumeTrue(
+                        "【Skip] Cannot find device.",
+                        success == true
+                    )
+                    if(success == false){
+
+                    }
+
                 }
                 base.evaluate()
             }

@@ -7,8 +7,10 @@ import org.junit.runner.notification.RunListener
 class UnitTestingTextListener(cbPrint:(line:String)->Unit, private val finishHandler: () -> Unit) : RunListener() {
     private var numTests = 0
     private var numFailures = 0
-    private val numUnexpected = 0 // Never changes, but required in output.
+    private var numSkipped = 0 // ★追加: スキップ数をカウント
+    private val numUnexpected = 0
     private var testFailure: Failure? = null
+    private var testAssumptionFailure: Failure? = null // ★追加: Assume失敗の保持
     private var testStartTime = 0.0
 
     private val print_=cbPrint;
@@ -24,6 +26,7 @@ class UnitTestingTextListener(cbPrint:(line:String)->Unit, private val finishHan
 
         numTests++
         testFailure = null
+        testAssumptionFailure = null
         testStartTime = System.currentTimeMillis().toDouble()
         printf("Test Case '-[%s]' started.", parseDescription(description))
     }
@@ -31,7 +34,7 @@ class UnitTestingTextListener(cbPrint:(line:String)->Unit, private val finishHan
     @Throws(java.lang.Exception::class)
     override fun testRunFinished(result: Result?){
         printf(
-            "Executed %d tests, with %d failures (%d unexpected)", numTests, numFailures,
+            "Executed %d tests, with %d failures and %d skipped (%d unexpected)", numTests, numFailures,numSkipped,
             numUnexpected
         )
         finishHandler()
@@ -47,6 +50,11 @@ class UnitTestingTextListener(cbPrint:(line:String)->Unit, private val finishHan
         if (testFailure != null) {
             statusMessage = "failed"
             print_(testFailure!!.trace)
+        }else if (testAssumptionFailure != null) {
+            // ★追加: Assumeに引っかかった場合の表示
+            statusMessage = "skipped (Assume Failed)"
+            // Assumeのメッセージ（例: 【スキップ】10秒以内に有効なADBデバイスが...）をコンソールに出力
+            printf("[SKIPPED REASON] %s", testAssumptionFailure!!.message ?: "Unknown assumption failure")
         }
         printf(
             "Test Case '-[%s]' %s (%.3f seconds).", parseDescription(description),
@@ -60,6 +68,17 @@ class UnitTestingTextListener(cbPrint:(line:String)->Unit, private val finishHan
         numFailures++
     }
 
+    @Throws(java.lang.Exception::class)
+    override fun testAssumptionFailure(failure: Failure?) {
+        testAssumptionFailure = failure
+        numSkipped++
+    }
+
+    @Throws(java.lang.Exception::class)
+    override fun testIgnored(description: Description?) {
+        numSkipped++
+        printf("Test Case '-[%s]' ignored by @Ignore annotation.", description?.let { parseDescription(it) } ?: "Unknown")
+    }
     private fun parseDescription(description: Description): String {
         val displayName: String = description.getDisplayName()
         val p1 = displayName.indexOf("(")

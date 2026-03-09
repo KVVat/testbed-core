@@ -17,6 +17,12 @@ class JUnitTestRunner(classes_: Array<Class<*>?>,listener_:RunListener?=null) : 
     private val classes: Array<Class<*>?> = classes_;
     private var listener: RunListener? = listener_;
 
+    private val extraListeners = mutableListOf<RunListener>()
+
+    fun addListener(extra: RunListener) {
+        extraListeners.add(extra)
+    }
+
     override fun run() {
         if(listener == null) listener = newRunListener();
         run_(classes);
@@ -29,6 +35,8 @@ class JUnitTestRunner(classes_: Array<Class<*>?>,listener_:RunListener?=null) : 
 
         val junitCore = JUnitCore()
         junitCore.addListener(listener)
+
+        extraListeners.forEach { junitCore.addListener(it) }
 
         var hasError = false
         for (c in classes) {
@@ -43,7 +51,6 @@ class JUnitTestRunner(classes_: Array<Class<*>?>,listener_:RunListener?=null) : 
      * Returns a new [RunListener] instance for the given {@param outputFormat}.
      */
     private fun newRunListener(): RunListener {
-
         return TextListener(output)
     }
 
