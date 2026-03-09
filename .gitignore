@@ -23,7 +23,7 @@ local.properties
 
 # kotlins
 ./kotlin
-
+*.salive
 
 # Java class files
 *.class
