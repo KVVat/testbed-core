@@ -76,8 +76,10 @@ class AppViewModel : ViewModel() {
     private val fastbootClient = FastbootClient()
     private val mcpServer = org.example.project.mcp.McpSseServer(adbObserver, this)
 
-    val mcpTestResults = mutableListOf<org.example.project.mcp.McpTestResult>()
-
+    val mcpTestResults = java.util.concurrent.CopyOnWriteArrayList<org.example.project.mcp.McpTestResult>()
+    val mcpTestLogs = java.util.concurrent.CopyOnWriteArrayList<Map<String, String>>()
+    var currentTestStep: String = ""
+    var currentTestProgress: Int = 0
     private val logRecorder = LogRecorder(baseFileName = "logcat.log")
     private val PLUGINS_DIR = File("plugins")
 
@@ -99,6 +101,10 @@ class AppViewModel : ViewModel() {
             }
             // The tag is fixed to PLUGIN, or obtained dynamically
             log("PLUGIN", message, internalLevel)
+        }
+        JUnitBridge.onProgress = { step, percent ->
+            currentTestStep = step
+            currentTestProgress = percent
         }
 
         val currentDir = File(".").absolutePath
@@ -368,6 +374,10 @@ class AppViewModel : ViewModel() {
         }
 
         mcpTestResults.clear()
+        mcpTestLogs.clear()
+        currentTestStep = "Starting Test"
+        currentTestProgress = 0
+
         viewModelScope.launch(Dispatchers.IO) {
             toggleIsRunning(true)
             log("TEST", ">>> START: ${plugin.name}${if(methodName != null) "#$methodName" else ""}", LogLevel.INFO)
@@ -501,6 +511,9 @@ class AppViewModel : ViewModel() {
     fun log(tag: String, message: String, level: LogLevel = LogLevel.INFO) {
         val timestamp = LocalTime.now().toString().take(8)
         viewModelScope.launch { _logFlow.emit(LogLine(timestamp, tag, message, level)) }
+        if (_uiState.value.isRunning) {
+            mcpTestLogs.add(mapOf("time" to timestamp, "level" to level.name, "message" to "[$tag] $message"))
+        }
     }
 
     fun captureScreenshot() {

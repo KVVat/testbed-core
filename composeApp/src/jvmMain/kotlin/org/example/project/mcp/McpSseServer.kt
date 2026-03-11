@@ -38,6 +38,8 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import org.example.project.adb.AdbObserver
 import org.example.project.AppViewModel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
 
 class McpSseServer(private val adbObserver: AdbObserver, private val appViewModel: AppViewModel) {
 
@@ -109,16 +111,28 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "junit_test_receive",
-            description = "テストの実行結果(Pass/Fail/Error情報やstacktrace等)をJSONで取得"
-        ) { _ ->
+            description = "テストの実行結果(Pass/Fail/Error情報やstacktrace等)をJSONで取得。実行中(Running)の場合は経過ログや進捗状況も返します。"
+        ) { request ->
+            val args = request.params.arguments
+            val lastLogIndex = args?.get("last_log_index")?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+
             val results = appViewModel.mcpTestResults.toList()
             val status = if (appViewModel.uiState.value.isRunning) "Running" else "Finished"
-            val response = mapOf(
+            
+            val logs = appViewModel.mcpTestLogs.toList()
+            val newLogs = if (lastLogIndex < logs.size) logs.subList(lastLogIndex, logs.size) else emptyList()
+
+            val response = mutableMapOf<String, Any>(
                 "status" to status,
-                "results" to results
+                "results" to results,
+                "logs" to newLogs,
+                "current_step" to appViewModel.currentTestStep,
+                "progress_percent" to appViewModel.currentTestProgress,
+                "next_log_index" to logs.size
             )
             CallToolResult(content = listOf(TextContent(Gson().toJson(response))))
         }
+
 
         mcpServer.addTool(
             name = "start_stream",
@@ -185,6 +199,27 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
                         serverSessions.remove(transport.sessionId)
                     }
                     awaitCancellation()
+                }
+
+                sse("/mcp/test_logs") {
+                    println("Client connected to /mcp/test_logs")
+                    val session = this
+                    val job = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                        appViewModel.logFlow.collect { logLine ->
+                            val data = Gson().toJson(mapOf(
+                                "time" to logLine.timestamp,
+                                "level" to logLine.level.name,
+                                "message" to "[${logLine.tag}] ${logLine.message}"
+                            ))
+                            session.send(io.ktor.sse.ServerSentEvent(data = data))
+                        }
+                    }
+                    try {
+                        kotlinx.coroutines.awaitCancellation()
+                    } finally {
+                        job.cancel()
+                        println("Client disconnected from /mcp/test_logs")
+                    }
                 }
                 
                 post("/mcp/message") {
