@@ -74,7 +74,9 @@ class AppViewModel : ViewModel() {
 
     private val adbObserver = AdbObserver(this)
     private val fastbootClient = FastbootClient()
-    private val mcpServer = org.example.project.mcp.McpSseServer(adbObserver)
+    private val mcpServer = org.example.project.mcp.McpSseServer(adbObserver, this)
+
+    val mcpTestResults = mutableListOf<org.example.project.mcp.McpTestResult>()
 
     private val logRecorder = LogRecorder(baseFileName = "logcat.log")
     private val PLUGINS_DIR = File("plugins")
@@ -348,6 +350,80 @@ class AppViewModel : ViewModel() {
                     fos?.close()
                 } catch (e: Exception) {
                 }
+            }
+        }
+    }
+
+    fun runTestForMcp(className: String, methodName: String?) {
+        val plugin = testPlugins.find { it.className == className }
+        if (plugin == null) {
+            log("SYSTEM", "Test plugin not found: $className", LogLevel.ERROR)
+            mcpTestResults.add(org.example.project.mcp.McpTestResult(className, methodName ?: "Unknown", "Error", "Test plugin not found: $className", null))
+            return
+        }
+
+        if (uiState.value.isRunning) {
+            mcpTestResults.add(org.example.project.mcp.McpTestResult(className, methodName ?: "Unknown", "Error", "Another test is already running", null))
+            return
+        }
+
+        mcpTestResults.clear()
+        viewModelScope.launch(Dispatchers.IO) {
+            toggleIsRunning(true)
+            log("TEST", ">>> START: ${plugin.name}${if(methodName != null) "#$methodName" else ""}", LogLevel.INFO)
+
+            val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
+            val props = Properties().apply {
+                setProperty("SFR.shortname", plugin.shortName)
+            }
+
+            var fos: FileOutputStream? = null
+            try {
+                val antRunner = AntXmlRunListener(::logging, props) {
+                    viewModelScope.launch {
+                        toggleIsRunning(false)
+                        log("TEST", "<<< FINISH: ${plugin.name}${if(methodName != null) "#$methodName" else ""}", LogLevel.PASS)
+                    }
+                }
+
+                val reportFile = File(output_path(), "junit-report-${plugin.shortName}-$timestamp.xml")
+                fos = FileOutputStream(reportFile)
+                antRunner.setOutputStream(fos)
+
+                val originalClassLoader = Thread.currentThread().contextClassLoader
+                val targetClass = plugin.resolveClass()
+
+                Thread.currentThread().contextClassLoader = targetClass.classLoader
+                try {
+                    val runner = JUnitTestRunner(arrayOf(targetClass), antRunner)
+                    runner.methodNameToRun = methodName
+
+                    runner.addListener(object : org.junit.runner.notification.RunListener() {
+                        override fun testFinished(description: org.junit.runner.Description) {
+                            if (mcpTestResults.none { it.method_name == description.methodName }) {
+                                mcpTestResults.add(org.example.project.mcp.McpTestResult(className, description.methodName, "Pass"))
+                            }
+                        }
+                        override fun testFailure(failure: org.junit.runner.notification.Failure) {
+                            val assertionMsg = failure.message
+                            val stacktrace = failure.trace
+                            mcpTestResults.add(org.example.project.mcp.McpTestResult(className, failure.description.methodName, "Fail", assertionMsg, stacktrace))
+                        }
+                    })
+
+                    runner.addListener(UnitTestingTextListener(::logging){})
+                    runner.start()
+                } finally {
+                    Thread.currentThread().contextClassLoader = originalClassLoader
+                }
+
+                fos.flush()
+            } catch (e: Exception) {
+                log("TEST", "ERROR: ${e.message}", LogLevel.ERROR)
+                mcpTestResults.add(org.example.project.mcp.McpTestResult(className, methodName ?: "Unknown", "Error", e.message, e.stackTraceToString()))
+                toggleIsRunning(false)
+            } finally {
+                try { fos?.close() } catch (e: Exception) {}
             }
         }
     }

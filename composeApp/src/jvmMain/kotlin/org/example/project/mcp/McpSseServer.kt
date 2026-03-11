@@ -33,12 +33,13 @@ import io.modelcontextprotocol.kotlin.sdk.types.TextResourceContents
 import io.ktor.server.routing.*
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
-import kotlinx.io.asSink
-import kotlinx.io.asSource
-import kotlinx.io.buffered
+import com.google.gson.Gson
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import org.example.project.adb.AdbObserver
+import org.example.project.AppViewModel
 
-class McpSseServer(private val adbObserver: AdbObserver) {
+class McpSseServer(private val adbObserver: AdbObserver, private val appViewModel: AppViewModel) {
 
 private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
     fun configureServer(): Server {
@@ -55,6 +56,69 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
                 )
             )
         )
+
+        mcpServer.addTool(
+            name = "check_testbed_health",
+            description = "ADB接続、対象デバイスのオンライン状態、エージェントステータスを一括で確認"
+        ) { _ ->
+            val state = appViewModel.uiState.value
+            val info = mapOf(
+                "adbIsValid" to state.adbIsValid,
+                "isUnauthorized" to state.isUnauthorized,
+                "deviceSerial" to state.deviceSerial,
+                "isRunning" to state.isRunning,
+                "deviceInfo" to state.deviceInfo
+            )
+            CallToolResult(content = listOf(TextContent(Gson().toJson(info))))
+        }
+
+        mcpServer.addTool(
+            name = "junit_test_reload",
+            description = "テストJARを再読み込み"
+        ) { _ ->
+            appViewModel.refreshPlugins()
+            CallToolResult(content = listOf(TextContent("{\"status\":\"reloading\"}")))
+        }
+
+        mcpServer.addTool(
+            name = "junit_test_list",
+            description = "読み込んだテストの一覧をJSON配列で返却"
+        ) { _ ->
+            val list = appViewModel.testPlugins.map { 
+                mapOf(
+                    "name" to it.name,
+                    "className" to it.className,
+                    "shortName" to it.shortName
+                )
+            }
+            CallToolResult(content = listOf(TextContent(Gson().toJson(list))))
+        }
+
+        mcpServer.addTool(
+            name = "junit_test_execute",
+            description = "特定のテストクラス/メソッドを指定して実行を開始"
+        ) { request ->
+            val args = request.params.arguments
+            val className = args?.get("class_name")?.jsonPrimitive?.contentOrNull 
+                ?: return@addTool CallToolResult(content = listOf(TextContent("{\"error\":\"class_name is required\"}")))
+            val methodName = args["method_name"]?.jsonPrimitive?.contentOrNull
+            
+            appViewModel.runTestForMcp(className, methodName)
+            CallToolResult(content = listOf(TextContent("{\"status\":\"started\", \"class_name\":\"$className\", \"method_name\":${methodName?.let{"\"$it\""} ?: "null"}}")))
+        }
+
+        mcpServer.addTool(
+            name = "junit_test_receive",
+            description = "テストの実行結果(Pass/Fail/Error情報やstacktrace等)をJSONで取得"
+        ) { _ ->
+            val results = appViewModel.mcpTestResults.toList()
+            val status = if (appViewModel.uiState.value.isRunning) "Running" else "Finished"
+            val response = mapOf(
+                "status" to status,
+                "results" to results
+            )
+            CallToolResult(content = listOf(TextContent(Gson().toJson(response))))
+        }
 
         mcpServer.addTool(
             name = "start_stream",

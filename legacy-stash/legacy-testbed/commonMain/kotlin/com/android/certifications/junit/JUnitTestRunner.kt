@@ -15,8 +15,15 @@ import java.nio.file.Paths
 class JUnitTestRunner(classes_: Array<Class<*>?>,listener_:RunListener?=null) : Thread() {
 
     private val output:PrintStream = System.err
-    private val classes: Array<Class<*>?> = classes_;
-    private var listener: RunListener? = listener_;
+    private val classes: Array<Class<*>?> = classes_
+    private var listener: RunListener? = listener_
+    private val runListeners = mutableListOf<RunListener>()
+    
+    var methodNameToRun: String? = null
+
+    fun addListener(l: RunListener) {
+        runListeners.add(l)
+    }
 
     override fun run() {
         if(listener == null) listener = newRunListener();
@@ -29,12 +36,19 @@ class JUnitTestRunner(classes_: Array<Class<*>?>,listener_:RunListener?=null) : 
     fun run_(classes: Array<Class<*>?> ): Int {
 
         val junitCore = JUnitCore()
-        junitCore.addListener(listener)
+        if (listener != null) {
+            junitCore.addListener(listener)
+        }
+        runListeners.forEach { junitCore.addListener(it) }
         
         var hasError = false
         for (c in classes) {
-            //ParallelComputer.methods()
-            val result = junitCore.run(Computer.serial(),c)
+            val result = if (methodNameToRun != null && c != null) {
+                val request = org.junit.runner.Request.method(c, methodNameToRun)
+                junitCore.run(request)
+            } else {
+                junitCore.run(Computer.serial(), c)
+            }
             hasError = hasError || !result.wasSuccessful()
         }
         return if (hasError) 1 else 0
