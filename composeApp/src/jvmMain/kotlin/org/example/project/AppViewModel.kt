@@ -626,7 +626,7 @@ class AppViewModel : ViewModel() {
 
     fun dumpMuttonAgent() {
         viewModelScope.launch {
-            val response = adbObserver.dumpMuttonAgent()
+            val response = adbObserver.dumpMuttonAgent(includeImage = true)
             if (response != null && response.isNotEmpty()) {
                 try {
                     val gson = Gson()

@@ -90,3 +90,7 @@ compose.desktop {
 //        }
     }
 }
+
+afterEvaluate {
+    tasks.findByName("run")?.dependsOn(":tools:mutton-agent:copyTestApk")
+}

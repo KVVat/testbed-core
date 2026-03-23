@@ -36,6 +36,7 @@ import kotlinx.coroutines.runBlocking
 import com.google.gson.Gson
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import org.example.project.adb.AdbObserver
 import org.example.project.AppViewModel
 import kotlinx.coroutines.launch
@@ -61,7 +62,7 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "check_testbed_health",
-            description = "ADB接続、対象デバイスのオンライン状態、エージェントステータスを一括で確認"
+            description = "Check ADB connection, device online status, and agent status all at once."
         ) { _ ->
             val state = appViewModel.uiState.value
             val info = mapOf(
@@ -75,8 +76,16 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
         }
 
         mcpServer.addTool(
+            name = "cleanup_agent",
+            description = "Force-stops the agent process on the device for cleanup. Useful for recovery when UiAutomation errors occur."
+        ) { _ ->
+            adbObserver.cleanupMuttonAgent()
+            CallToolResult(content = listOf(TextContent("Agent cleanup requested. Process force-stopped.")))
+        }
+
+        mcpServer.addTool(
             name = "junit_test_reload",
-            description = "テストJARを再読み込み"
+            description = "Reloads the test JAR."
         ) { _ ->
             appViewModel.refreshPlugins()
             CallToolResult(content = listOf(TextContent("{\"status\":\"reloading\"}")))
@@ -84,7 +93,7 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "junit_test_list",
-            description = "読み込んだテストの一覧をJSON配列で返却"
+            description = "Returns a JSON array of the currently loaded tests."
         ) { _ ->
             val list = appViewModel.testPlugins.map { 
                 mapOf(
@@ -98,7 +107,7 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "junit_test_execute",
-            description = "特定のテストクラス/メソッドを指定して実行を開始"
+            description = "Starts execution of the specified test class or method."
         ) { request ->
             val args = request.params.arguments
             val className = args?.get("class_name")?.jsonPrimitive?.contentOrNull 
@@ -111,7 +120,7 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "junit_test_receive",
-            description = "テストの実行結果(Pass/Fail/Error情報やstacktrace等)をJSONで取得。実行中(Running)の場合は経過ログや進捗状況も返します。"
+            description = "Retrieves test execution results (Pass/Fail/Error info, stacktrace, etc) in JSON. Returns interim logs and progress if Running."
         ) { request ->
             val args = request.params.arguments
             val lastLogIndex = args?.get("last_log_index")?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
@@ -159,20 +168,102 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
         }
 
         mcpServer.addTool(
-            name = "dump",
-            description = "Dump UI hierarchy and screenshot from the mutton agent"
+            name = "get_ui_dump",
+            description = "Retrieves the current UI hierarchy (JSON) and screenshot image (Base64)."
+        ) { request ->
+            val args = request.arguments as? Map<*, *>
+            val includeImageObj = args?.get("include_image")
+            val includeImage = includeImageObj?.toString()?.toBoolean() ?: false
+            val result = adbObserver.dumpMuttonAgent(includeImage)
+            CallToolResult(content = listOf(TextContent(result ?: "Error: Failed to get UI dump")))
+        }
+
+        mcpServer.addTool(
+            name = "get_agent_version",
+            description = "Retrieves the version information of the Testbed agent (Mutton Agent)."
         ) { _ ->
-            adbObserver.dumpMuttonAgent()
-            CallToolResult(content = listOf(TextContent("Dump requested")))
+            val version = adbObserver.getMuttonAgentVersion()
+            CallToolResult(content = listOf(TextContent(version ?: "Unknown")))
+        }
+
+        mcpServer.addTool(
+            name = "tap",
+            description = "Physically taps the specified (x, y) coordinates. *Automatically waits for idle and returns the latest UI dump after execution."
+        ) { request ->
+            val args = request.params.arguments ?: emptyMap()
+            val x = args["x"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+            val y = args["y"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+            val result = adbObserver.tapCoordinate(x, y)
+            CallToolResult(content = listOf(TextContent(result ?: "Error: Failed to tap")))
+        }
+
+        mcpServer.addTool(
+            name = "input_text",
+            description = "Inputs text into the currently focused input field. *Automatically waits for idle and returns the latest UI dump after execution."
+        ) { request ->
+            val args = request.params.arguments ?: emptyMap()
+            val text = args["text"]?.jsonPrimitive?.contentOrNull ?: ""
+            val pressEnter = args["press_enter"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: true
+            val result = adbObserver.inputText(text, pressEnter)
+            CallToolResult(content = listOf(TextContent(result ?: "Error: Failed to input text")))
+        }
+
+        mcpServer.addTool(
+            name = "swipe",
+            description = "Swipes (scrolls) the screen between the specified coordinates. *Automatically waits for idle and returns the latest UI dump after execution."
+        ) { request ->
+            val args = request.params.arguments ?: emptyMap()
+            val sx = args["start_x"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+            val sy = args["start_y"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+            val ex = args["end_x"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+            val ey = args["end_y"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+            val result = adbObserver.swipe(sx, sy, ex, ey)
+            CallToolResult(content = listOf(TextContent(result ?: "Error: Failed to swipe")))
+        }
+
+        mcpServer.addTool(
+            name = "press_key",
+            description = "Sends a physical or system key event. *Automatically waits for idle and returns the latest UI dump after execution."
+        ) { request ->
+            val args = request.params.arguments ?: emptyMap()
+            val keycode = args["keycode"]?.jsonPrimitive?.contentOrNull ?: ""
+            val result = adbObserver.pressKey(keycode)
+            CallToolResult(content = listOf(TextContent(result ?: "Error: Failed to press key")))
         }
 
         mcpServer.addTool(
             name = "get_device_info",
-            description = "端末のハードウェア・OS情報を取得します（getprop のラッパー）"
+            description = "Retrieves device hardware and OS information (wrapper for getprop)."
         ) { _ ->
             val info = adbObserver.getDeviceInfo()
             CallToolResult(content = listOf(TextContent(info)))
         }
+
+        mcpServer.addTool(
+            name = "clear_logcat",
+            description = "Clears the device's Logcat buffer (adb logcat -c)."
+        ) { _ ->
+            val result = adbObserver.clearLogcatBuffer()
+            CallToolResult(content = listOf(TextContent(result)))
+        }
+
+        mcpServer.addTool(
+            name = "get_logcat",
+            description = "Retrieves filtered Logcat lines. (Essential for saving tokens)"
+        ) { request ->
+            val args = request.params.arguments ?: emptyMap()
+            val tags = args["tags"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+            val level = args["level"]?.jsonPrimitive?.contentOrNull ?: "I"
+            val grepPattern = args["grep_pattern"]?.jsonPrimitive?.contentOrNull ?: ""
+            // max_lines could be passed as JSON primitive string or Int, handle both
+            val maxLines = args["max_lines"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() 
+                ?: args["max_lines"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull()?.toInt() 
+                ?: 100
+
+            val result = adbObserver.getFilteredLogcat(tags, level, grepPattern, maxLines)
+            CallToolResult(content = listOf(TextContent(result)))
+        }
+
         return mcpServer
     }
     

@@ -238,8 +238,10 @@ fun findDeepestNodeAt(node: UiNode, x: Float, y: Float, scaleX: Float, scaleY: F
 @Composable
 fun WireframeVisualizer(rootNode: UiNode, selectedNode: UiNode?, screenshot: ImageBitmap?, onNodeSelected: (UiNode) -> Unit) {
     // 画面全体（ルート）のサイズを取得 (eg. 1080x2400)
-    val rootWidth = rootNode.bounds.right - rootNode.bounds.left
-    val rootHeight = rootNode.bounds.bottom - rootNode.bounds.top
+    // ダイアログ等のオーバーレイが表示された場合、ルートノードのBoundsが画面全体よりも小さくなり、
+    // 背景のスクリーンショットと座標ズレを起こす問題を防ぐため、常にディスプレイサイズ（画像サイズ等）を一次情報にする。
+    val rootWidth = screenshot?.width ?: Math.max(1080, rootNode.bounds.right)
+    val rootHeight = screenshot?.height ?: Math.max(2400, rootNode.bounds.bottom)
 
     if (rootWidth <= 0 || rootHeight <= 0) {
         Text("Invalid bounds for root node.", color = Color.Red)
