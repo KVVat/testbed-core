@@ -30,7 +30,7 @@ import androidx.compose.ui.unit.sp
 import org.example.project.model.UiNode
 
 @Composable
-fun UiInspectorPane(rootNode: UiNode?, screenshot: ImageBitmap? = null) {
+fun UiInspectorPane(rootNode: UiNode?, screenshot: ImageBitmap? = null, screenWidth: Int = 1080, screenHeight: Int = 2400) {
     var selectedNode by remember { mutableStateOf<UiNode?>(null) }
     
     // Auto-select root when it loads and reset selection if root changes
@@ -178,7 +178,14 @@ fun UiInspectorPane(rootNode: UiNode?, screenshot: ImageBitmap? = null) {
                 .padding(16.dp),
             contentAlignment = Alignment.Center
         ) {
-            WireframeVisualizer(rootNode = rootNode, selectedNode = selectedNode, screenshot = screenshot, onNodeSelected = { selectedNode = it })
+            WireframeVisualizer(
+                rootNode = rootNode,
+                selectedNode = selectedNode,
+                screenshot = screenshot,
+                screenWidth = screenWidth,
+                screenHeight = screenHeight,
+                onNodeSelected = { selectedNode = it }
+            )
         }
     }
 }
@@ -236,12 +243,18 @@ fun findDeepestNodeAt(node: UiNode, x: Float, y: Float, scaleX: Float, scaleY: F
 }
 
 @Composable
-fun WireframeVisualizer(rootNode: UiNode, selectedNode: UiNode?, screenshot: ImageBitmap?, onNodeSelected: (UiNode) -> Unit) {
-    // 画面全体（ルート）のサイズを取得 (eg. 1080x2400)
-    // ダイアログ等のオーバーレイが表示された場合、ルートノードのBoundsが画面全体よりも小さくなり、
-    // 背景のスクリーンショットと座標ズレを起こす問題を防ぐため、常にディスプレイサイズ（画像サイズ等）を一次情報にする。
-    val rootWidth = screenshot?.width ?: Math.max(1080, rootNode.bounds.right)
-    val rootHeight = screenshot?.height ?: Math.max(2400, rootNode.bounds.bottom)
+fun WireframeVisualizer(
+    rootNode: UiNode,
+    selectedNode: UiNode?,
+    screenshot: ImageBitmap?,
+    screenWidth: Int,
+    screenHeight: Int,
+    onNodeSelected: (UiNode) -> Unit
+) {
+    // 画面全体（ルート）のサイズを取得
+    // Mutton Agentから直接取得したdevice.displayWidth /.displayHeight を使用する
+    val rootWidth = screenWidth
+    val rootHeight = screenHeight
 
     if (rootWidth <= 0 || rootHeight <= 0) {
         Text("Invalid bounds for root node.", color = Color.Red)

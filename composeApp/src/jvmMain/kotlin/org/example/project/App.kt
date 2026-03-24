@@ -113,9 +113,7 @@ fun App() {
                         onSendText = { text -> viewModel.sendText(text) },
                         onScreenshotClick = { viewModel.captureScreenshot() },
                         onMenuClick = { scope.launch { drawerState.open() } },
-                        onSetupAgentClick = { viewModel.setupMuttonAgent() },
-                        onStartStream = { viewModel.startScreenshotStream() },
-                        onStopStream = { viewModel.stopScreenshotStream() }
+                        onSetupAgentClick = { viewModel.setupMuttonAgent() }
                     )
                 },
                 content = { padding ->
@@ -226,9 +224,7 @@ fun TopControlBar(
     onSendText: (String) -> Unit,
     onScreenshotClick: () -> Unit,
     onMenuClick: () -> Unit,
-    onSetupAgentClick: () -> Unit,
-    onStartStream: () -> Unit,
-    onStopStream: () -> Unit
+    onSetupAgentClick: () -> Unit
 ) {
     TopAppBar(
         colors = TopAppBarDefaults.topAppBarColors(
@@ -307,11 +303,6 @@ fun TopControlBar(
                         modifier = Modifier.size(24.dp)
                     )
                 }
-
-                Spacer(Modifier.width(8.dp))
-                // DEV TEST: Start/Stop Stream
-                TextButton(onClick = onStartStream) { Text("Start", color = Color(0xFF569CD6)) }
-                TextButton(onClick = onStopStream) { Text("Stop", color = Color(0xFFFF6B68)) }
 
                 Spacer(Modifier.width(8.dp))
 
@@ -576,6 +567,8 @@ fun SettingsDialog(
     // ダイアログ内のローカルステート（キャンセルされたら破棄するため）
     var autoOpen by remember { mutableStateOf(currentSettings.autoOpenLogcat) }
     var bufferSizeText by remember { mutableStateOf(currentSettings.logcatBufferSize.toString()) }
+    var pastMinutesText by remember { mutableStateOf(currentSettings.logcatPastMinutes.toString()) }
+    var mcpHost by remember { mutableStateOf(currentSettings.mcpServerHost) }
 
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -614,30 +607,81 @@ fun SettingsDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
+                Spacer(Modifier.height(16.dp))
+
+                // 過去ログ取得範囲（分）入力
+                OutlinedTextField(
+                    value = pastMinutesText,
+                    onValueChange = { if (it.isEmpty() || it.all { char -> char.isDigit() }) pastMinutesText = it },
+                    label = { Text("Logcat Past Fetch (minutes)", color = Color.Gray) },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color(0xFF569CD6),
+                        unfocusedBorderColor = Color.Gray,
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White
+                    ),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(Modifier.height(16.dp))
+
+                // MCP Server Host (0.0.0.0 vs localhost etc.)
+                Text("MCP Server Host", color = Color.Gray, fontSize = 12.sp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(
+                        selected = (mcpHost == "::"),
+                        onClick = { mcpHost = "::" },
+                        colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF569CD6))
+                    )
+                    Text(":: (IPv6/v4 All Interfaces)", color = Color.White, fontSize = 14.sp)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(
+                        selected = (mcpHost == "::1"),
+                        onClick = { mcpHost = "::1" },
+                        colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF569CD6))
+                    )
+                    Text("::1 (IPv6 Localhost)", color = Color.White, fontSize = 14.sp)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(
+                        selected = (mcpHost == "0.0.0.0"),
+                        onClick = { mcpHost = "0.0.0.0" },
+                        colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF569CD6))
+                    )
+                    Text("0.0.0.0 (IPv4 All Interfaces)", color = Color.White, fontSize = 14.sp)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(
+                        selected = (mcpHost == "127.0.0.1" || mcpHost == "localhost"),
+                        onClick = { mcpHost = "127.0.0.1" },
+                        colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF569CD6))
+                    )
+                    Text("127.0.0.1 (IPv4 Localhost)", color = Color.White, fontSize = 14.sp)
+                }
+
                 Spacer(Modifier.height(24.dp))
 
-                // アクションボタン
-                Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                    TextButton(onClick = {
-                        onReinstallAgent()
-                        onDismiss()
-                    }) {
+                // ボタン類
+                Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                    TextButton(onClick = onReinstallAgent) {
                         Text("Reinstall Agent", color = Color(0xFF569CD6))
                     }
-                    Row {
-                        TextButton(onClick = onDismiss) {
-                            Text("Cancel", color = Color.Gray)
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        Button(
-                            onClick = {
-                                val newSize = bufferSizeText.toIntOrNull()?.coerceAtLeast(100) ?: 2000
-                                onSave(AppSettings(autoOpen, newSize))
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF569CD6))
-                        ) {
-                            Text("Save")
-                        }
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = onDismiss) {
+                        Text("Cancel", color = Color.Gray)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Button(
+                        onClick = {
+                            val bufferSize = bufferSizeText.toIntOrNull() ?: currentSettings.logcatBufferSize
+                            val pastMinutes = pastMinutesText.toIntOrNull() ?: currentSettings.logcatPastMinutes
+                            onSave(AppSettings(autoOpen, bufferSize, pastMinutes, mcpHost))
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF569CD6))
+                    ) {
+                        Text("Save", color = Color.White)
                     }
                 }
             }

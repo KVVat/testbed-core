@@ -41,7 +41,9 @@ import java.util.Base64
 
 data class AppSettings(
     val autoOpenLogcat: Boolean = true,
-    val logcatBufferSize: Int = 2000
+    val logcatBufferSize: Int = 2000,
+    val logcatPastMinutes: Int = 10,
+    val mcpServerHost: String = "0.0.0.0"
 )
 
 class AppViewModel : ViewModel() {
@@ -65,6 +67,12 @@ class AppViewModel : ViewModel() {
 
     private val _uiDumpScreenshot = MutableStateFlow<ImageBitmap?>(null)
     val uiDumpScreenshot = _uiDumpScreenshot.asStateFlow()
+
+    private val _uiDumpScreenWidth = MutableStateFlow(1080)
+    val uiDumpScreenWidth = _uiDumpScreenWidth.asStateFlow()
+
+    private val _uiDumpScreenHeight = MutableStateFlow(2400)
+    val uiDumpScreenHeight = _uiDumpScreenHeight.asStateFlow()
 
     private val _selectedToolWindowTab = MutableStateFlow(0) // 0: Logcat, 1: UI Inspector
     val selectedToolWindowTab = _selectedToolWindowTab.asStateFlow()
@@ -90,7 +98,7 @@ class AppViewModel : ViewModel() {
     init {
         loadSettings()
         startAdbObservation()
-        mcpServer.start()
+        mcpServer.start(host = _appSettings.value.mcpServerHost)
         JUnitBridge.logging = { message, level ->
             val internalLevel = when (level) {
                 TestLogLevel.DEBUG -> LogLevel.DEBUG
@@ -121,8 +129,9 @@ class AppViewModel : ViewModel() {
                 val props = Properties().apply { load(SETTINGS_FILE.inputStream()) }
                 _appSettings.value = AppSettings(
                     autoOpenLogcat = props.getProperty("autoOpenLogcat", "true").toBoolean(),
-                    logcatBufferSize = props.getProperty("logcatBufferSize", "30000").toIntOrNull()
-                        ?: 30000
+                    logcatBufferSize = props.getProperty("logcatBufferSize", "30000").toIntOrNull() ?: 30000,
+                    logcatPastMinutes = props.getProperty("logcatPastMinutes", "10").toIntOrNull() ?: 10,
+                    mcpServerHost = props.getProperty("mcpServerHost", "0.0.0.0")
                 )
             } catch (e: Exception) {
                 log("SYSTEM", "Failed to load settings: ${e.message}", LogLevel.ERROR)
@@ -131,14 +140,23 @@ class AppViewModel : ViewModel() {
     }
 
     fun saveSettings(newSettings: AppSettings) {
+        val oldHost = _appSettings.value.mcpServerHost
         _appSettings.value = newSettings
         try {
             val props = Properties().apply {
                 setProperty("autoOpenLogcat", newSettings.autoOpenLogcat.toString())
                 setProperty("logcatBufferSize", newSettings.logcatBufferSize.toString())
+                setProperty("logcatPastMinutes", newSettings.logcatPastMinutes.toString())
+                setProperty("mcpServerHost", newSettings.mcpServerHost)
             }
             props.store(SETTINGS_FILE.outputStream(), "App Settings")
             log("SYSTEM", "Settings saved.", LogLevel.INFO)
+            
+            if (oldHost != newSettings.mcpServerHost) {
+                log("SYSTEM", "MCP server host changed. Restarting server...", LogLevel.INFO)
+                mcpServer.stop()
+                mcpServer.start(host = newSettings.mcpServerHost)
+            }
         } catch (e: Exception) {
             log("SYSTEM", "Failed to save settings: ${e.message}", LogLevel.ERROR)
         }
@@ -524,13 +542,7 @@ class AppViewModel : ViewModel() {
         viewModelScope.launch { adbObserver.sendText(text) }
     }
 
-    fun startScreenshotStream() {
-        viewModelScope.launch { adbObserver.startScreenshotStream() }
-    }
 
-    fun stopScreenshotStream() {
-        viewModelScope.launch { adbObserver.stopScreenshotStream() }
-    }
 
     fun clearAppData() {
         viewModelScope.launch { adbObserver.clearAppData("org.example.project") }
@@ -634,6 +646,8 @@ class AppViewModel : ViewModel() {
                     if (dumpResult != null && dumpResult.status == "ok") {
                         val uiNode = gson.fromJson(dumpResult.output, UiNode::class.java)
                         _uiDumpRoot.value = uiNode
+                        _uiDumpScreenWidth.value = dumpResult.screen_width
+                        _uiDumpScreenHeight.value = dumpResult.screen_height
                         
                         if (dumpResult.screenshot != null && dumpResult.screenshot.isNotEmpty()) {
                             try {

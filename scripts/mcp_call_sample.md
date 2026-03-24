@@ -1,5 +1,9 @@
 # MCP Tool Call Examples
 
+> [!NOTE]  
+> **LLM Agent Direct Connection Now Supported**  
+> Since `testbed-core` now supports proper IPv6 `::` binding and robust SSE endpoints, LLM agents (like Jetski) can connect directly to the MCP server. **You no longer need to use `mcp_call.sh` in your everyday tool executions.** The `mcp_call.sh` script and these examples are kept for **manual debugging and standalone testing** purposes.
+
 This document provides sample JSON payloads and command-line usages for interacting with the `mcp_call.sh` wrapper script. This is extremely useful when manually testing the MCP server tools or giving hints to agents about proper payload formats.
 
 ## 1. Get UI Dump (`get_ui_dump`)
@@ -10,8 +14,17 @@ Retrieves the current UI hierarchy (JSON) and optionally a screenshot image (Bas
 # Basic UI dump (without image, typical usage)
 ./scripts/mcp_call.sh get_ui_dump '{"include_image": false}'
 
-# UI dump with base64 screenshot
-./scripts/mcp_call.sh get_ui_dump '{"include_image": true}'
+# UI dump with a lightweight (33% size) base64 screenshot
+./scripts/mcp_call.sh get_ui_dump '{"include_image": true, "image_quality": 3}'
+```
+
+## 2. Execute ADB Shell (`execute_adb_shell`)
+
+Executes an arbitrary shell command directly on the device using native `adb shell` execution. This tool does not require the MuttonAgent to be running and operates as the adb shell user.
+
+```bash
+# List files on sdcard
+./scripts/mcp_call.sh execute_adb_shell '{"command": "ls -l /sdcard"}'
 ```
 
 ## 2. Get Agent Version (`get_agent_version`)

@@ -42,6 +42,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.rememberWindowState
+import androidx.compose.foundation.window.WindowDraggableArea
+import androidx.compose.ui.window.WindowPlacement
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
 
 @Composable
 fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
@@ -52,6 +56,8 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
     val selectedTab by viewModel.selectedToolWindowTab.collectAsState()
     val uiDumpRoot by viewModel.uiDumpRoot.collectAsState()
     val uiDumpScreenshot by viewModel.uiDumpScreenshot.collectAsState()
+    val uiDumpScreenWidth by viewModel.uiDumpScreenWidth.collectAsState()
+    val uiDumpScreenHeight by viewModel.uiDumpScreenHeight.collectAsState()
 
     // UI状態
     var isCompactMode by remember { mutableStateOf(false) } // Compact vs Standard
@@ -80,9 +86,81 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
         }
     }
 
-    Window(onCloseRequest = onCloseRequest, state = windowState, title = "Logcat Pro") {
+    Window(
+        onCloseRequest = onCloseRequest, 
+        state = windowState, 
+        title = "Logcat Pro",
+        undecorated = true,
+        transparent = true
+    ) {
         MaterialTheme(colorScheme = darkColorScheme()) {
-            Row(modifier = Modifier.fillMaxSize().background(Color(0xFF1E1F22))) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(10.dp))
+                    .border(1.dp, Color(0xFF3C3F41), RoundedCornerShape(10.dp)),
+                color = Color(0xFF1E1F22)
+            ) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    WindowDraggableArea {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(40.dp)
+                                .background(Color(0xFF2B2D30)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                "Logcat Pro",
+                                color = Color.LightGray,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+
+                            // macOS style traffic lights
+                            Row(
+                                modifier = Modifier.align(Alignment.CenterStart).padding(start = 16.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                // Close
+                                Box(
+                                    modifier = Modifier
+                                        .size(12.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFFF5F56))
+                                        .clickable {
+                                            onCloseRequest()
+                                        }
+                                )
+                                // Minimize
+                                Box(
+                                    modifier = Modifier
+                                        .size(12.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFFFBD2E))
+                                        .clickable {
+                                            windowState.isMinimized = true
+                                        }
+                                )
+                                // Maximize/Restore
+                                Box(
+                                    modifier = Modifier
+                                        .size(12.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFF27C93F))
+                                        .clickable {
+                                            if (windowState.placement == WindowPlacement.Maximized) {
+                                                windowState.placement = WindowPlacement.Floating
+                                            } else {
+                                                windowState.placement = WindowPlacement.Maximized
+                                            }
+                                        }
+                                )
+                            }
+                        }
+                    }
+
+                    Row(modifier = Modifier.fillMaxSize().background(Color(0xFF1E1F22))) {
 
                 // --- 左側: コマンドパネル (Side Bar) ---
                 Column(
@@ -255,13 +333,20 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
                         )
                     } else {
                         // UI Inspector ツール
-                        UiInspectorPane(rootNode = uiDumpRoot, screenshot = uiDumpScreenshot)
+                        UiInspectorPane(
+                            rootNode = uiDumpRoot,
+                            screenshot = uiDumpScreenshot,
+                            screenWidth = uiDumpScreenWidth,
+                            screenHeight = uiDumpScreenHeight
+                        )
                     }
-                }
-            }
-        }
-    }
-}
+                } // end right column
+            } // end Row
+            } // end Column
+            } // end Surface
+        } // end MaterialTheme
+    } // end Window
+} // end fun
 
 // --- コンポーネント定義 ---
 

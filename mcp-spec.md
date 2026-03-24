@@ -2,6 +2,10 @@
 
 この仕様書は、Testbed Automationにおけるエージェント（LLM）と対象デバイスをやり取りするためのMCPツール機能一覧です。
 
+> [!NOTE]
+> **LLMエージェントのダイレクト接続対応について**
+> Ktor MCPサーバーはIPv6 `[::]` または IPv4 `0.0.0.0` のバインディング設定をサポートしました。これにより、LLMエージェントから `scripts/mcp_call.sh` を経由せずに直接MCPツールを呼び出すことが可能です。
+
 ---
 
 ## 1. Sensing (状況把握)
@@ -9,10 +13,11 @@
 ### `get_ui_dump`
 * **説明**: 現在の画面のUI階層(JSON)と、スクリーンショット画像(Base64)を取得します。
 * **パラメータ**:
-  * `include_image` (boolean / 任意 / デフォルト:`true`) : 画像データをレスポンスに含めるかどうか。
-* **戻り値**: `json_dump` (見えない要素を除外済み) および `screenshot_base64` を含むJSON
+  * `include_image` (boolean / 任意 / デフォルト:`false`) : 画像データをレスポンスに含めるかどうか。
+  * `image_quality` (int / 任意 / デフォルト:`2`) : 1=100%, 2=50%, 3=33%, 4=25% (トークン節約のため3や4を推奨)
+* **戻り値**: `json_dump` (見えない要素を除外済み) および `screenshot` (Base64) を含むJSON
 
-### `get_device_state` (未実装)
+### `get_device_state`
 * **説明**: 画面のON/OFF、ロック状態、フォアグラウンドのアプリなど、システムレベルの状態を取得します。
 * **パラメータ**: なし
 * **戻り値**: `is_screen_on`, `is_locked`, `foreground_package` 等を含むJSON
@@ -59,13 +64,13 @@
 
 ## 3. System (システム・ADB・アプリ管理)
 
-### `execute_adb_shell` (未実装)
+### `execute_adb_shell`
 * **説明**: 任意のADBシェルコマンドを実行します。
 * **パラメータ**:
-  * `command` (string / 必須) : 実行するコマンド (例: `"dumpsys battery"`)
+  * `command` (string / 必須) : 実行するコマンド (例: `"ls -l /sdcard"`)
 * **戻り値**: コマンドの標準出力 (`stdout`) および 標準エラー (`stderr`)
 
-### `open_settings` (未実装)
+### `open_settings`
 * **説明**: Androidの特定の設定画面をIntentで直接開きます。
 * **パラメータ**:
   * `panel` (string / 必須) : 画面指定 (`ROOT`, `SECURITY`, `WIFI`, `APP_DETAILS`, `DEVELOPER`)
@@ -78,28 +83,28 @@
   * `pin` (string / 必須) : 設定するPINコード。空文字（`""`）でクリア。
 * **戻り値**: 設定の成否を示すテキストメッセージ
 
-### `push_file` (未実装)
+### `push_file`
 * **説明**: PC（Host）側のファイルをデバイスに送信します（`adb push`）。テスト用のダミー画像や設定ファイルを送り込む際に使用します。
 * **パラメータ**:
   * `host_path` (string / 必須)
   * `device_path` (string / 必須)
 * **戻り値**: 転送成功/失敗のメッセージ
 
-### `pull_file` (未実装)
+### `pull_file`
 * **説明**: デバイス側のファイルをPC（Host）に取得します（`adb pull`）。アプリが生成した暗号化ファイルやDBをHost側で検証する際に使用します。
 * **パラメータ**:
   * `device_path` (string / 必須)
   * `host_path` (string / 必須)
 * **戻り値**: 転送成功/失敗のメッセージ
 
-### `install_app` (未実装)
+### `install_app`
 * **説明**: PC上のAPKファイルをデバイスにインストールします（`adb install`）。
 * **パラメータ**:
   * `apk_path` (string / 必須)
   * `reinstall` (boolean / 任意 / デフォルト:`true`) : `-r` オプション
 * **戻り値**: "Success" などの結果文字列
 
-### `uninstall_app` (未実装)
+### `uninstall_app`
 * **説明**: デバイスからアプリをアンインストールします（`adb uninstall`）。
 * **パラメータ**:
   * `package_name` (string / 必須)

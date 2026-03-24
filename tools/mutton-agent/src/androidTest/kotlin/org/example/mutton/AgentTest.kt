@@ -137,9 +137,8 @@ class AgentTest {
                             try {
                                 val bitmap = instrumentation.uiAutomation.takeScreenshot()
                                 if (bitmap != null) {
-                                    val stream = java.io.ByteArrayOutputStream()
-                                    bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 50, stream)
-                                    val base64 = android.util.Base64.encodeToString(stream.toByteArray(), android.util.Base64.NO_WRAP)
+                                    val qualityLevel = json.optInt("image_quality", 2)
+                                    val base64 = compressBitmap(bitmap, qualityLevel)
                                     val frameJson = JSONObject()
                                         .put("type", "stream_frame")
                                         .put("data", base64)
@@ -222,16 +221,14 @@ class AgentTest {
             }
             "get_ui_dump" -> {
                 val includeImage = json.optBoolean("include_image", false)
+                val qualityLevel = json.optInt("image_quality", 2)
                 device.waitForIdle()
                 
                 var base64: String? = null
                 if (includeImage) {
                     val bitmap = instrumentation.uiAutomation.takeScreenshot()
                     if (bitmap != null) {
-                        val stream = java.io.ByteArrayOutputStream()
-                        bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 50, stream)
-                        base64 = android.util.Base64.encodeToString(stream.toByteArray(), android.util.Base64.NO_WRAP)
-                        bitmap.recycle()
+                        base64 = compressBitmap(bitmap, qualityLevel)
                     }
                 }
 
@@ -242,6 +239,8 @@ class AgentTest {
                         .put("type", "dump_result")
                         .put("status", "ok")
                         .put("output", Json.encodeToString(rootNode))
+                        .put("screen_width", device.displayWidth)
+                        .put("screen_height", device.displayHeight)
                     if (base64 != null) {
                         jsonResponse.put("screenshot", base64)
                     }
@@ -334,5 +333,37 @@ class AgentTest {
 
     private fun createError(msg: String): JSONObject {
         return JSONObject().put("status", "error").put("message", msg)
+    }
+
+    private fun compressBitmap(bitmap: android.graphics.Bitmap, qualityLevel: Int): String {
+        val (jpegQuality, scaleDivisor) = when (qualityLevel) {
+            1 -> Pair(80, 1) // 原寸, 高画質
+            2 -> Pair(50, 2) // 1/2サイズ, 中画質
+            3 -> Pair(33, 3) // 1/3サイズ, ギリギリ読める低画質
+            4 -> Pair(20, 4) // 1/4サイズ, 超低画質
+            else -> Pair(50, 2)
+        }
+
+        var finalBitmap = bitmap
+        if (scaleDivisor > 1) {
+            finalBitmap = android.graphics.Bitmap.createScaledBitmap(
+                bitmap,
+                bitmap.width / scaleDivisor,
+                bitmap.height / scaleDivisor,
+                true
+            )
+        }
+
+        val stream = java.io.ByteArrayOutputStream()
+        finalBitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, jpegQuality, stream)
+        val base64 = android.util.Base64.encodeToString(stream.toByteArray(), android.util.Base64.NO_WRAP)
+
+        // Only recycle if we created a new scaled bitmap
+        if (finalBitmap != bitmap) {
+            finalBitmap.recycle()
+        }
+        bitmap.recycle() // Recycle original screenshot bitmap
+
+        return base64
     }
 }

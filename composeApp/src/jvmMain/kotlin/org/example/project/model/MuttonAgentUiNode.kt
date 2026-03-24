@@ -41,5 +41,7 @@ data class DumpResult(
     val type: String,
     val status: String,
     val output: String, // ここにはエスケープされた JSON 文字列（UiNodeツリー）が入る
-    val screenshot: String? = null // Base64 encoded JPEG screenshot
+    val screenshot: String? = null, // Base64 encoded JPEG screenshot
+    val screen_width: Int = 1080,
+    val screen_height: Int = 2400
 )

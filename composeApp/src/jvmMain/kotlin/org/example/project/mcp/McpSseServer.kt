@@ -36,6 +36,7 @@ import kotlinx.coroutines.runBlocking
 import com.google.gson.Gson
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonArray
 import org.example.project.adb.AdbObserver
 import org.example.project.AppViewModel
@@ -152,10 +153,14 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "start_stream",
-            description = "Start screenshot stream"
-        ) { _ ->
-            adbObserver.startScreenshotStream(fps = 1f)
-            CallToolResult(content = listOf(TextContent("Stream started")))
+            description = "Start screenshot stream. Optional parameters: 'fps' (Float, default 1.0) and 'image_quality' (Int: 1=100% size/80% jpeg, 2=50% size/50% jpeg, 3=33% size/33% jpeg, 4=25% size/20% jpeg. Default is 2)."
+        ) { request ->
+            val args = request.params.arguments ?: emptyMap()
+            val fps = args["fps"]?.jsonPrimitive?.contentOrNull?.toFloatOrNull() ?: 1f
+            val quality = args["image_quality"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 2
+            
+            adbObserver.startScreenshotStream(fps, quality)
+            CallToolResult(content = listOf(TextContent("Stream started at $fps fps, quality level $quality")))
         }
 
         mcpServer.addTool(
@@ -176,12 +181,13 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "get_ui_dump",
-            description = "Retrieves the current UI hierarchy (JSON) and screenshot image (Base64)."
+            description = "Retrieves the current UI hierarchy (JSON) and screenshot image (Base64). Optional: 'include_image' (Boolean, default false) and 'image_quality' (Int: 1=100% size/80% jpeg, 2=50% size/50% jpeg, 3=33% size/33% jpeg, 4=25% size/20% jpeg. Default 2)."
         ) { request ->
-            val args = request.arguments as? Map<*, *>
-            val includeImageObj = args?.get("include_image")
-            val includeImage = includeImageObj?.toString()?.toBoolean() ?: false
-            val result = adbObserver.dumpMuttonAgent(includeImage)
+            val args = request.params.arguments ?: emptyMap()
+            val includeImage = args["include_image"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: false
+            val quality = args["image_quality"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 2
+            
+            val result = adbObserver.dumpMuttonAgent(includeImage, quality)
             CallToolResult(content = listOf(TextContent(result ?: "Error: Failed to get UI dump")))
         }
 
@@ -247,6 +253,103 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
         }
 
         mcpServer.addTool(
+            name = "execute_adb_shell",
+            description = "Executes an adb shell command directly against the connected device. e.g. ls -l /sdcard"
+        ) { request ->
+            val args = request.params.arguments ?: emptyMap()
+            val command = args["command"]?.jsonPrimitive?.contentOrNull ?: ""
+            if (command.isEmpty()) {
+                CallToolResult(content = listOf(TextContent("Error: command parameter is required.")))
+            } else {
+                val result = adbObserver.executeAdbShell(command)
+                CallToolResult(content = listOf(TextContent(result)))
+            }
+        }
+
+        mcpServer.addTool(
+            name = "get_device_state",
+            description = "Retrieves screen ON/OFF, lock state, and foreground package."
+        ) { _ ->
+            val state = adbObserver.getDeviceState()
+            CallToolResult(content = listOf(TextContent(state)))
+        }
+
+        mcpServer.addTool(
+            name = "open_settings",
+            description = "Opens a specific settings panel on the device."
+        ) { request ->
+            val args = request.params.arguments ?: emptyMap()
+            val panel = args["panel"]?.jsonPrimitive?.contentOrNull ?: ""
+            val packageName = args["package_name"]?.jsonPrimitive?.contentOrNull
+            if (panel.isEmpty()) {
+                CallToolResult(content = listOf(TextContent("Error: panel parameter is required.")))
+            } else {
+                val result = adbObserver.openSettings(panel, packageName)
+                CallToolResult(content = listOf(TextContent(result ?: "Error: Failed to open settings.")))
+            }
+        }
+
+        mcpServer.addTool(
+            name = "push_file",
+            description = "Pushes a file from the host PC to the device."
+        ) { request ->
+            val args = request.params.arguments ?: emptyMap()
+            val hostPath = args["host_path"]?.jsonPrimitive?.contentOrNull ?: ""
+            val devicePath = args["device_path"]?.jsonPrimitive?.contentOrNull ?: ""
+            if (hostPath.isEmpty() || devicePath.isEmpty()) {
+                CallToolResult(content = listOf(TextContent("Error: host_path and device_path are required.")))
+            } else {
+                val result = adbObserver.pushFile(hostPath, devicePath)
+                CallToolResult(content = listOf(TextContent(result)))
+            }
+        }
+
+        mcpServer.addTool(
+            name = "pull_file",
+            description = "Pulls a file from the device to the host PC."
+        ) { request ->
+            val args = request.params.arguments ?: emptyMap()
+            val devicePath = args["device_path"]?.jsonPrimitive?.contentOrNull ?: ""
+            val hostPath = args["host_path"]?.jsonPrimitive?.contentOrNull ?: ""
+            if (devicePath.isEmpty() || hostPath.isEmpty()) {
+                CallToolResult(content = listOf(TextContent("Error: device_path and host_path are required.")))
+            } else {
+                val result = adbObserver.pullFile(devicePath, hostPath)
+                CallToolResult(content = listOf(TextContent(result)))
+            }
+        }
+
+        mcpServer.addTool(
+            name = "install_app",
+            description = "Installs an APK from the host PC to the device."
+        ) { request ->
+            val args = request.params.arguments ?: emptyMap()
+            val apkPath = args["apk_path"]?.jsonPrimitive?.contentOrNull ?: ""
+            val reinstall = args["reinstall"]?.jsonPrimitive?.booleanOrNull ?: true
+            if (apkPath.isEmpty()) {
+                CallToolResult(content = listOf(TextContent("Error: apk_path is required.")))
+            } else {
+                val result = adbObserver.installApp(apkPath, reinstall)
+                CallToolResult(content = listOf(TextContent(result)))
+            }
+        }
+
+        mcpServer.addTool(
+            name = "uninstall_app",
+            description = "Uninstalls an app from the device."
+        ) { request ->
+            val args = request.params.arguments ?: emptyMap()
+            val packageName = args["package_name"]?.jsonPrimitive?.contentOrNull ?: ""
+            val keepData = args["keep_data"]?.jsonPrimitive?.booleanOrNull ?: false
+            if (packageName.isEmpty()) {
+                CallToolResult(content = listOf(TextContent("Error: package_name is required.")))
+            } else {
+                val result = adbObserver.uninstallApp(packageName, keepData)
+                CallToolResult(content = listOf(TextContent(result)))
+            }
+        }
+
+        mcpServer.addTool(
             name = "clear_logcat",
             description = "Clears the device's Logcat buffer (adb logcat -c)."
         ) { _ ->
@@ -277,12 +380,12 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
     private val serverSessions = ConcurrentMap<String, ServerSession>()
 
-    fun start(port: Int = 11452) {
+    fun start(host: String = "0.0.0.0", port: Int = 11452) {
         if (serverEngine != null) return
 
         val mcpServer = configureServer()
 
-        serverEngine = embeddedServer(CIO, host = "0.0.0.0", port = port) {
+        serverEngine = embeddedServer(CIO, host = host, port = port) {
             installCors()
             install(SSE)
             install(IgnoreTrailingSlash)
@@ -376,8 +479,8 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
                         if (body.contains("\"method\":\"initialize\"") || body.contains("\"method\": \"initialize\"")) {
                             // Kotlin SDK側内部で非同期に初期化が完了するのを待つため、JetSkiへのmock返却をあえて遅延させる
-                            // （JetSkiが爆速で tools/list を要求し、未初期化エラーで破棄される race condition を防ぐため）
-                            kotlinx.coroutines.delay(500)
+                            // Kotlin SDK側内部で非同期に初期化が完了するのを待つため、少しだけ遅延させる
+                            kotlinx.coroutines.delay(200)
                             
                             val mockResponse = """{"jsonrpc": "2.0", "id": $idVal, "result": {"protocolVersion": "2024-11-05", "capabilities": {"prompts": {"listChanged": true}, "resources": {"subscribe": true, "listChanged": true}, "tools": {"listChanged": true}}, "serverInfo": {"name": "testbed-core", "version": "1.0.0"}}}"""
                             call.respondText(mockResponse, io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.OK)
@@ -395,12 +498,9 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
                 post("/mcp") {
                     val rawBody = call.receiveText()
                     
-                    // JetSkiのSSEクライアントがイベントリッスン準備を完全に終えるまでの猶予として無条件に2秒待機
-                    kotlinx.coroutines.delay(2000)
-                    
                     var activeSession = serverSessions.values.firstOrNull()
                     var retries = 0
-                    // 念のためセッションがない場合も追加で待機（最大2秒）
+                    // セッションがない場合のみ最大2秒待機して探す
                     while (activeSession == null && retries < 20) {
                         kotlinx.coroutines.delay(100)
                         activeSession = serverSessions.values.firstOrNull()
@@ -410,20 +510,16 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
                     
                     if (transport != null) {
                         try {
-                            // 受信した生のメッセージリストを転送
                             transport.handleMessage(rawBody)
                             
                             val idMatch = "\"id\"\\s*:\\s*(\\d+|\\\".*?\\\")".toRegex().find(rawBody)
                             val idVal = idMatch?.groupValues?.get(1) ?: "1"
 
                             if (rawBody.contains("\"method\":\"initialize\"") || rawBody.contains("\"method\": \"initialize\"")) {
-                                // Kotlin SDK側内部で非同期に初期化が完了するのを待つため、JetSkiへのmock返却をあえて遅延させる
-                                kotlinx.coroutines.delay(500)
-                                
+                                kotlinx.coroutines.delay(200)
                                 val mockResponse = """{"jsonrpc": "2.0", "id": $idVal, "result": {"protocolVersion": "2024-11-05", "capabilities": {"prompts": {"listChanged": true}, "resources": {"subscribe": true, "listChanged": true}, "tools": {"listChanged": true}}, "serverInfo": {"name": "testbed-core", "version": "1.0.0"}}}"""
                                 call.respondText(mockResponse, io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.OK)
                             } else {
-                                // ダミーのNotification（id無し）を返すことで、同期Promiseを消費せず、デコーダーのエラーを回避
                                 call.respondText("""{"jsonrpc": "2.0", "method": "dummy"}""", io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.Accepted)
                             }
                         } catch (e: Exception) {
@@ -431,26 +527,22 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
                             call.respondText("{\"error\":\"Bad Request\"}", io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.BadRequest)
                         }
                     } else {
-                        appViewModel.log("MCP", "No active SSE session to route JetSki's POST to (timed out).", org.example.project.LogLevel.WARN)
-                        // Return a mock initialize response as a last resort to appease JetSki's synchronous expectations
-                        if (rawBody.contains("\"method\":\"initialize\"")) {
-                            val response = """{"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2024-11-05", "capabilities": {}, "serverInfo": {"name": "testbed-mock-fallback", "version": "1.0.0"}}}"""
-                            call.respondText(response, io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.OK)
-                        } else {
-                            call.respondText("{}", io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.NotFound)
-                        }
+                        // タイムアウトした場合は、速やかに404を返してクライアントに再接続を促す
+                        appViewModel.log("MCP", "No active SSE session to route JetSki's POST to (timed out). Rejecting immediately.", org.example.project.LogLevel.WARN)
+                        call.respondText("Session not found", io.ktor.http.ContentType.Text.Plain, io.ktor.http.HttpStatusCode.NotFound)
                     }
                 }
             }
         }.start(wait = false)
 
-        println("MCP SSE Server started on http://0.0.0.0:$port/mcp")
+        appViewModel.log("MCP", "MCP SSE Server started on http://$host:$port/mcp", org.example.project.LogLevel.PASS)
     }
 
     fun stop() {
         serverEngine?.stop(1000, 2000)
         serverEngine = null
         serverSessions.clear()
+        appViewModel.log("MCP", "MCP SSE Server stopped.", org.example.project.LogLevel.INFO)
     }
 
     private fun Application.installCors() {
