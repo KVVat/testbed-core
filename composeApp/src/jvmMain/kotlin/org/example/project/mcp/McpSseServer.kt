@@ -498,6 +498,31 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
                 post("/mcp") {
                     val rawBody = call.receiveText()
                     
+                    val idMatch = "\"id\"\\s*:\\s*(\\d+|\\\".*?\\\")".toRegex().find(rawBody)
+                    val idVal = idMatch?.groupValues?.get(1) ?: "1"
+
+                    // Handle initialize request even without active session
+                    if (rawBody.contains("\"method\":\"initialize\"") || rawBody.contains("\"method\": \"initialize\"")) {
+                        val activeSession = serverSessions.values.firstOrNull()
+                        val transport = activeSession?.transport as? io.modelcontextprotocol.kotlin.sdk.server.SseServerTransport
+                        
+                        if (transport != null) {
+                            try {
+                                transport.handleMessage(rawBody)
+                            } catch (e: Exception) {
+                                appViewModel.log("MCP", "Error handling initialize message: ${e.message}")
+                            }
+                        } else {
+                            appViewModel.log("MCP", "Received initialize POST without active session. Proceeding with mock response.")
+                        }
+                        
+                        kotlinx.coroutines.delay(200)
+                        val mockResponse = """{"jsonrpc": "2.0", "id": $idVal, "result": {"protocolVersion": "2024-11-05", "capabilities": {"prompts": {"listChanged": true}, "resources": {"subscribe": true, "listChanged": true}, "tools": {"listChanged": true}}, "serverInfo": {"name": "testbed-core", "version": "1.0.0"}}}"""
+                        call.respondText(mockResponse, io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.OK)
+                        return@post
+                    }
+
+                    // Original logic for other messages
                     var activeSession = serverSessions.values.firstOrNull()
                     var retries = 0
                     // セッションがない場合のみ最大2秒待機して探す
@@ -511,17 +536,7 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
                     if (transport != null) {
                         try {
                             transport.handleMessage(rawBody)
-                            
-                            val idMatch = "\"id\"\\s*:\\s*(\\d+|\\\".*?\\\")".toRegex().find(rawBody)
-                            val idVal = idMatch?.groupValues?.get(1) ?: "1"
-
-                            if (rawBody.contains("\"method\":\"initialize\"") || rawBody.contains("\"method\": \"initialize\"")) {
-                                kotlinx.coroutines.delay(200)
-                                val mockResponse = """{"jsonrpc": "2.0", "id": $idVal, "result": {"protocolVersion": "2024-11-05", "capabilities": {"prompts": {"listChanged": true}, "resources": {"subscribe": true, "listChanged": true}, "tools": {"listChanged": true}}, "serverInfo": {"name": "testbed-core", "version": "1.0.0"}}}"""
-                                call.respondText(mockResponse, io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.OK)
-                            } else {
-                                call.respondText("""{"jsonrpc": "2.0", "method": "dummy"}""", io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.Accepted)
-                            }
+                            call.respondText("""{"jsonrpc": "2.0", "method": "dummy"}""", io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.Accepted)
                         } catch (e: Exception) {
                             appViewModel.log("MCP", "Error handling fallback POST: ${e.message}", org.example.project.LogLevel.ERROR)
                             call.respondText("{\"error\":\"Bad Request\"}", io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.BadRequest)

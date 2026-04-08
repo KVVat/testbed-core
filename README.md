@@ -36,7 +36,7 @@ Navigate to the extracted folder and execute the launcher script for your OS:
 This project is built with **Compose Multiplatform** and **Kotlin**.
 
 ### Prerequisites for Development
-* **Java Development Kit (JDK) 17** or higher.
+* **Java Development Kit (JDK) 21** or higher.
 
 ### Project Structure
 * **`composeApp`**: Main application source code (UI & Logic).
