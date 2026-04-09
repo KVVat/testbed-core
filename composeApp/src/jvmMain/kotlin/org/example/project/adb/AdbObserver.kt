@@ -306,7 +306,7 @@ class AdbObserver(private val viewModel: AppViewModel) {
                     // Port forwarding might take a moment to be fully active. Retry a few times.
                     viewModel.log("Agent", "Pinging agent to check if already running...", LogLevel.INFO)
                     for (i in 1..5) {
-                        val pingResponse = sendToAgent("{\"cmd\":\"ping\"}", silent = false) // Removed silent to get error logs
+                        val pingResponse = sendToAgent("{\"cmd\":\"ping\"}", silent = false, timeoutMs = 500) // Removed silent to get error logs
                         if (pingResponse != null && pingResponse.contains("\"status\":\"pong\"")) {
                             viewModel.log("Agent", "Agent is already running. Skipping deployment to preserve UiAutomation state.", LogLevel.PASS)
                             isAgentRunning = true
@@ -377,7 +377,7 @@ class AdbObserver(private val viewModel: AppViewModel) {
                     viewModel.log("Agent", "Waiting for agent to become responsive...", LogLevel.INFO)
                     var responsive = false
                     for (i in 1..20) { // Up to 5 seconds
-                        val pingResponse = sendToAgent("{\"cmd\":\"ping\"}", silent = true)
+                        val pingResponse = sendToAgent("{\"cmd\":\"ping\"}", silent = true, timeoutMs = 500)
                         if (pingResponse != null && pingResponse.contains("\"status\":\"pong\"")) {
                             responsive = true
                             break
@@ -508,13 +508,13 @@ class AdbObserver(private val viewModel: AppViewModel) {
             }
         }
     }
-    private suspend fun sendToAgent(jsonCmd: String, silent: Boolean = false): String? {
+    private suspend fun sendToAgent(jsonCmd: String, silent: Boolean = false, timeoutMs: Int = 5000): String? {
         if (!viewModel.uiState.value.adbIsValid) return null
 
         return withContext(Dispatchers.IO) {
             try {
                 java.net.Socket("127.0.0.1", LOCAL_FORWARD_PORT).use { socket ->
-                    socket.soTimeout = 5000 // dump can take longer
+                    socket.soTimeout = timeoutMs // dump can take longer
 
                     val writer = java.io.PrintWriter(socket.getOutputStream(), true)
                     val reader = java.io.BufferedReader(java.io.InputStreamReader(socket.getInputStream()))

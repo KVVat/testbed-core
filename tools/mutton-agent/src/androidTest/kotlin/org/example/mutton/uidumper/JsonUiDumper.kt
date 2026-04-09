@@ -39,7 +39,7 @@ class JsonUiDumper {
                 if (child.isVisibleToUser) {
                     children.add(dumpNodeRec(child, i))
                 } else {
-                    Log.i(LOGTAG, "Skipping invisible child: $child")
+                    //Log.i(LOGTAG, "Skipping invisible child: $child")
                 }
                 // 【超重要】メモリリーク/Binderクラッシュを防ぐために必ずリサイクル
                 child.recycle()

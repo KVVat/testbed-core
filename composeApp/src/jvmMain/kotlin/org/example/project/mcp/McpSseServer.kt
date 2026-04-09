@@ -33,6 +33,7 @@ import io.modelcontextprotocol.kotlin.sdk.types.TextResourceContents
 import io.ktor.server.routing.*
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.isActive
 import com.google.gson.Gson
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -363,7 +364,7 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
         ) { request ->
             val args = request.params.arguments ?: emptyMap()
             val tags = args["tags"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
-            val level = args["level"]?.jsonPrimitive?.contentOrNull ?: "I"
+            val level = args["level"]?.jsonPrimitive?.contentOrNull ?: "V"
             val grepPattern = args["grep_pattern"]?.jsonPrimitive?.contentOrNull ?: ""
             // max_lines could be passed as JSON primitive string or Int, handle both
             val maxLines = args["max_lines"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() 
@@ -378,7 +379,13 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
     }
     
 
-    private val serverSessions = ConcurrentMap<String, ServerSession>()
+    data class SessionHolder(
+        val sessionId: String,
+        val session: ServerSession,
+        var lastActivityTime: Long = System.currentTimeMillis()
+    )
+
+    private val serverSessions = ConcurrentMap<String, SessionHolder>()
 
     fun start(host: String = "0.0.0.0", port: Int = 11452) {
         if (serverEngine != null) return
@@ -390,6 +397,19 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
             install(SSE)
             install(IgnoreTrailingSlash)
             
+            // Session cleanup job (120 minutes expiration)
+            appViewModel.viewModelScope.launch(Dispatchers.IO) {
+                while (isActive) {
+                    kotlinx.coroutines.delay(60000) // Check every minute
+                    val now = System.currentTimeMillis()
+                    val expiredIds = serverSessions.filter { now - it.value.lastActivityTime > 120 * 60 * 1000 }.keys
+                    if (expiredIds.isNotEmpty()) {
+                        appViewModel.log("MCP", "Removing expired sessions: $expiredIds")
+                        expiredIds.forEach { serverSessions.remove(it) }
+                    }
+                }
+            }
+
             routing {
                 val sseHandler: suspend io.ktor.server.sse.ServerSSESession.() -> Unit = {
                     val transport = SseServerTransport("/mcp/message", this)
@@ -397,10 +417,11 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
                     
                     // JetSkiから再接続(リロード)された際に、古いセッションが残っていると
                     // 後続の fallback POST がそちらを掴んでしまうバグを防ぐためクリアする
-                    serverSessions.clear()
+                    // ★ マルチセッション対応のためクリアを無効化
+                    // serverSessions.clear()
                     
                     val serverSession = mcpServer.createSession(transport)
-                    serverSessions[transport.sessionId] = serverSession
+                    serverSessions[transport.sessionId] = SessionHolder(transport.sessionId, serverSession)
 
                     serverSession.onInitialized {
                         appViewModel.viewModelScope.launch(Dispatchers.IO) {
@@ -452,7 +473,8 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
                         return@post
                     }
 
-                    val transport = serverSessions[sessionId]?.transport as? SseServerTransport
+                    val sessionHolder = serverSessions[sessionId]
+                    val transport = sessionHolder?.session?.transport as? SseServerTransport
                     if (transport == null) {
                         appViewModel.log("MCP", "Error: Session not found for ID: '$sessionId' (Active sessions: ${serverSessions.keys})")
                         call.respond(HttpStatusCode.NotFound, "Session not found")
@@ -467,7 +489,8 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
                         return@post
                     }
                     
-                    appViewModel.log("MCP", "Successfully routed POST to session $sessionId")
+                    sessionHolder.lastActivityTime = System.currentTimeMillis()
+                    appViewModel.log("MCP", "Successfully routed POST to session $sessionId (Updated activity)")
                     appViewModel.log("MCP", "Incoming Payload: $body")
                     
                     try {
@@ -503,12 +526,14 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
                     // Handle initialize request even without active session
                     if (rawBody.contains("\"method\":\"initialize\"") || rawBody.contains("\"method\": \"initialize\"")) {
-                        val activeSession = serverSessions.values.firstOrNull()
+                        val activeSessionHolder = serverSessions.values.firstOrNull()
+                        val activeSession = activeSessionHolder?.session
                         val transport = activeSession?.transport as? io.modelcontextprotocol.kotlin.sdk.server.SseServerTransport
                         
                         if (transport != null) {
                             try {
                                 transport.handleMessage(rawBody)
+                                activeSessionHolder.lastActivityTime = System.currentTimeMillis()
                             } catch (e: Exception) {
                                 appViewModel.log("MCP", "Error handling initialize message: ${e.message}")
                             }
@@ -523,15 +548,22 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
                     }
 
                     // Original logic for other messages
-                    var activeSession = serverSessions.values.firstOrNull()
+                    var activeSessionHolder = serverSessions.values.firstOrNull()
                     var retries = 0
                     // セッションがない場合のみ最大2秒待機して探す
-                    while (activeSession == null && retries < 20) {
+                    while (activeSessionHolder == null && retries < 20) {
                         kotlinx.coroutines.delay(100)
-                        activeSession = serverSessions.values.firstOrNull()
+                        activeSessionHolder = serverSessions.values.firstOrNull()
                         retries++
                     }
+                    
+                    val activeSession = activeSessionHolder?.session
                     val transport = activeSession?.transport as? io.modelcontextprotocol.kotlin.sdk.server.SseServerTransport
+                    
+                    if (activeSessionHolder != null) {
+                        activeSessionHolder.lastActivityTime = System.currentTimeMillis()
+                        appViewModel.log("MCP", "Fallback POST using session: ${activeSessionHolder.sessionId}")
+                    }
                     
                     if (transport != null) {
                         try {

@@ -40,15 +40,14 @@ class AgentTest {
     @Test
     fun startServer() {
 
-        Log.i("MuttonAgent", ">>> AGENT_STARTED (Socket Mode)")
-
+       
         // 2. ソケットサーバーの立ち上げ
         // AdbObserver側で "mutton_agent" という名前の Abstract Socket に転送しているため
         // ここでも同じ名前で待ち受ける必要があります。
         // LocalServerSocket(name) はデフォルトで Linux Abstract Namespace にソケットを作ります。
         try {
             val server = LocalServerSocket(SOCKET_NAME)
-            Log.i("MuttonAgent", ">>> Listening on localabstract:$SOCKET_NAME")
+            Log.i("MuttonAgent", "Listening on localabstract:$SOCKET_NAME")
             instrumentation = InstrumentationRegistry.getInstrumentation()
             device = UiDevice.getInstance(instrumentation)
 
@@ -57,20 +56,18 @@ class AgentTest {
                 try {
                     // クライアントからの接続を待機 (ブロッキング)
                     val client = server.accept()
-                    Log.i("MuttonAgent", ">>> Client connected")
-
                     // クライアントとの通信処理 (簡易的にメインスレッドで処理)
                     // 本格的にやるなら別スレッドに逃がすが、1対1通信ならこれでもOK
                     handleClient(client)
 
                 } catch (e: Exception) {
-                    Log.i("MuttonAgent", ">>> Connection error: ${e.message}")
+                    Log.i("MuttonAgent", "Connection error: ${e.message}")
                     e.printStackTrace()
                     // 致命的なエラーでない限りループを継続
                 }
             }
         } catch (e: Exception) {
-            Log.i("MuttonAgent", ">>> Fatal error: ${e.message}")
+            Log.e("MuttonAgent", "Fatal error: ${e.message}")
             e.printStackTrace()
         }
 
@@ -92,8 +89,7 @@ class AgentTest {
                         continue
                     }
 
-                    Log.i("MuttonAgent", "RX: $line") // デバッグログ
-
+                   
                     val response = try {
                         val cmdJson = JSONObject(line)
                         processCommand(cmdJson, writer)
@@ -103,7 +99,6 @@ class AgentTest {
 
                     // 応答を送信
                     writer.println(response.toString())
-                    Log.i("MuttonAgent", "TX: $response")
 
                     // 次の行を読む
                     line = reader.readLine()
@@ -119,7 +114,6 @@ class AgentTest {
                 dumpStreamThread = null
             }
         }
-        Log.i("MuttonAgent", ">>> Client disconnected")
     }
 
     private fun processCommand(json: JSONObject, writer: PrintWriter): JSONObject {
