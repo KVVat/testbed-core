@@ -59,8 +59,12 @@ object UiDumpSummarizer {
         val sb = StringBuilder()
         sb.appendLine("Screen: ${screenWidth}x${screenHeight} | App: $packageName")
         sb.appendLine("───────────────────────────────────────────────")
-        for (line in result.lines) {
-            sb.appendLine(line)
+        if (result.lines.isEmpty()) {
+            sb.appendLine("(no interactable elements — screen may be transitioning, call get_ui_dump to retry)")
+        } else {
+            for (line in result.lines) {
+                sb.appendLine(line)
+            }
         }
         if (result.scrollableContainers.isNotEmpty()) {
             val containers = result.scrollableContainers.distinct().joinToString(", ")
