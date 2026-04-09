@@ -1,5 +1,7 @@
 package org.example.project
 
+import org.example.project.tools.LogcatFilter
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.TooltipArea
@@ -69,13 +71,14 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
     val listState = rememberLazyListState()
 
     // フィルタリング
-    val filteredLogs = remember(logcatLines.size, logcatFilter, selectedLevels.size) {
+    // フィルタ文字列のパース（テキスト変更時のみ再計算）
+    val parsedFilter = remember(logcatFilter) {
+        LogcatFilter.parse(logcatFilter)
+    }
+    // ログマッチング（ログ到着/フィルタ変更/レベル変更時のみ再計算）
+    val filteredLogs = remember(logcatLines.size, parsedFilter, selectedLevels.size) {
         logcatLines.filter { logcatLine ->
-            val textMatches = if (logcatFilter.isBlank()) true
-            else logcatLine.message.contains(logcatFilter, ignoreCase = true) ||
-                    logcatLine.tag.contains(logcatFilter, ignoreCase = true)
-            val levelMatches = selectedLevels.contains(logcatLine.level)
-            textMatches && levelMatches
+            LogcatFilter.matches(logcatLine, parsedFilter, selectedLevels)
         }
     }
 
@@ -385,7 +388,7 @@ fun LogcatTopBar(
         OutlinedTextField(
             value = filterText,
             onValueChange = onFilterChange,
-            placeholder = { Text("Filter (tag, msg)...", color = Color.Gray, fontSize = 12.sp) },
+            placeholder = { Text("Filter... use (process) to filter by process", color = Color.Gray, fontSize = 12.sp) },
             modifier = Modifier.weight(1f).height(60.dp),
             textStyle = LocalTextStyle.current.copy(fontSize = 13.sp, color = Color.White),
             singleLine = true,

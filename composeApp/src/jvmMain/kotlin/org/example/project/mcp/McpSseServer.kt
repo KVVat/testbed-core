@@ -366,12 +366,13 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
             val tags = args["tags"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
             val level = args["level"]?.jsonPrimitive?.contentOrNull ?: "V"
             val grepPattern = args["grep_pattern"]?.jsonPrimitive?.contentOrNull ?: ""
+            val process = args["process"]?.jsonPrimitive?.contentOrNull ?: ""
             // max_lines could be passed as JSON primitive string or Int, handle both
             val maxLines = args["max_lines"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() 
                 ?: args["max_lines"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull()?.toInt() 
                 ?: 100
 
-            val result = adbObserver.getFilteredLogcat(tags, level, grepPattern, maxLines)
+            val result = adbObserver.getFilteredLogcat(tags, level, grepPattern, maxLines, process)
             CallToolResult(content = listOf(TextContent(result)))
         }
 

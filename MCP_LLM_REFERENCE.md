@@ -261,14 +261,23 @@
   * `level` (String / 任意 / デフォルト:`"V"`) : 最小ログレベル (`V`, `D`, `I`, `W`, `E`, `F`)
   * `grep_pattern` (String / 任意 / デフォルト:`""`) : 絞り込み正規表現
   * `max_lines` (Int / 任意 / デフォルト:`100`) : 最大行数
+  * `process` (String / 任意 / デフォルト:`""`) : プロセスフィルタ。パッケージ名（例: `"com.android.settings"`）またはPID（例: `"1234"`）を指定できます。パッケージ名が指定された場合、内部でPIDに自動解決されます（ProcessNameResolverのキャッシュ → `pidof` コマンドの順にフォールバック）。
 * **戻り値**: ログのプレーンテキスト
 * **実行例**:
-  * **リクエスト**:
+  * **タグ指定**:
     ```json
     {
       "tags": ["ActivityManager"],
       "level": "I",
       "max_lines": 5
+    }
+    ```
+  * **プロセス指定（パッケージ名）**:
+    ```json
+    {
+      "process": "com.android.settings",
+      "level": "D",
+      "max_lines": 50
     }
     ```
   * **レスポンス**:

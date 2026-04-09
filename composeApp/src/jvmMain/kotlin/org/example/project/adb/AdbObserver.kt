@@ -726,7 +726,7 @@ class AdbObserver(private val viewModel: AppViewModel) {
         }
     }
 
-    suspend fun getFilteredLogcat(tags: List<String>, level: String, grepPattern: String, maxLines: Int): String {
+    suspend fun getFilteredLogcat(tags: List<String>, level: String, grepPattern: String, maxLines: Int, process: String = ""): String {
         if (!viewModel.uiState.value.adbIsValid) return "Error: No device connected."
         return withContext(Dispatchers.IO) {
             try {
@@ -741,9 +741,32 @@ class AdbObserver(private val viewModel: AppViewModel) {
                     val escaped = grepPattern.replace("'", "'\\''")
                     " -e '$escaped'"
                 } else ""
+
+                // プロセスフィルタ: PID or パッケージ名 → PID解決
+                val pidArg = if (process.isNotBlank()) {
+                    val resolvedPid = if (process.all { it.isDigit() }) {
+                        // 数字のみ → PIDとしてそのまま使う
+                        process
+                    } else {
+                        // パッケージ名 → ProcessNameResolverで逆引き
+                        val cachedPids = ProcessNameResolver.findPidsByPackageName(process)
+                        if (cachedPids.isNotEmpty()) {
+                            cachedPids.first() // logcat --pid は単一PIDのみ対応
+                        } else {
+                            // キャッシュに無い場合は pidof コマンドでフォールバック
+                            try {
+                                val pidofResult = adb.adb.execute(
+                                    ShellCommandRequest("pidof $process"), serial
+                                ).output.trim()
+                                pidofResult.split(Regex("\\s+")).firstOrNull() ?: ""
+                            } catch (_: Exception) { "" }
+                        }
+                    }
+                    if (resolvedPid.isNotBlank()) " --pid=$resolvedPid" else ""
+                } else ""
                 
                 // -t restricts output to maxLines at the source. -e performs grep at the source.
-                val cmd = "logcat -d -t $maxLines -v threadtime$grepArg $filterSpec"
+                val cmd = "logcat -d -t $maxLines -v threadtime$pidArg$grepArg $filterSpec"
                 val response = adb.adb.execute(ShellCommandRequest(cmd), serial).output
                 
                 response.trim()

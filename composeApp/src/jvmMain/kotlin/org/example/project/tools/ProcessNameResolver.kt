@@ -46,6 +46,16 @@ object ProcessNameResolver {
         return processMap[pid]
     }
 
+    /**
+     * パッケージ名(部分一致)からPIDを逆引きする。
+     * MCP側でパッケージ名指定によるlogcatフィルタに使用。
+     */
+    fun findPidsByPackageName(packageQuery: String): List<String> {
+        return processMap.entries
+            .filter { it.value.contains(packageQuery, ignoreCase = true) }
+            .map { it.key }
+    }
+
     // 初回に ps コマンドの結果を流し込む用
     fun updateBulk(pidNameMap: Map<String, String>) {
         processMap.putAll(pidNameMap)
