@@ -29,6 +29,16 @@ object UiDumpSummarizer {
         return buildSummary(agentResponseJson, ::isInteractableNode)
     }
 
+    /** agentResponseJsonからBase64スクリーンショットを取り出す。なければnull。 */
+    fun extractScreenshot(agentResponseJson: String): String? {
+        return try {
+            val root = JsonParser.parseString(agentResponseJson).asJsonObject
+            root.get("screenshot")?.takeIf { !it.isJsonNull }?.asString?.takeIf { it.isNotEmpty() }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     private fun buildSummary(agentResponseJson: String, filter: (JsonObject) -> Boolean): String {
         val root: JsonObject
         try {

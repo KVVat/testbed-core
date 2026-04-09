@@ -28,6 +28,7 @@ import io.modelcontextprotocol.kotlin.sdk.types.PromptMessage
 import io.modelcontextprotocol.kotlin.sdk.types.ReadResourceResult
 import io.modelcontextprotocol.kotlin.sdk.types.Role
 import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
+import io.modelcontextprotocol.kotlin.sdk.types.ImageContent
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.types.TextResourceContents
 import io.ktor.server.routing.*
@@ -209,23 +210,34 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
                     putJsonObject("format") { put("type", "string"); put("description", "Output format: 'summary' (compact flat list, default) or 'json' (full tree)") }
-                    putJsonObject("include_image") { put("type", "boolean"); put("description", "Include Base64 screenshot (only with format='json'). Default false") }
-                    putJsonObject("image_quality") { put("type", "integer"); put("description", "1=100%, 2=50%, 3=33%, 4=25%. Default 2") }
+                    putJsonObject("include_image") { put("type", "boolean"); put("description", "Include screenshot. With format='summary', returns TextContent + ImageContent together. Default false") }
+                    putJsonObject("image_quality") { put("type", "integer"); put("description", "1=100%, 2=50%, 3=33%, 4=25%. Default 4 (25%)") }
                 }
             )
         ) { request ->
             val args = request.params.arguments ?: emptyMap()
             val format = args["format"]?.jsonPrimitive?.contentOrNull ?: "summary"
-            val includeImage = if (format == "summary") false else (args["include_image"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: false)
-            val quality = args["image_quality"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 2
+            val includeImage = args["include_image"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: false
+            val quality = args["image_quality"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 4
 
             val rawResult = adbObserver.dumpMuttonAgent(includeImage, quality)
-            val result = if (format == "summary" && rawResult != null) {
-                UiDumpSummarizer.summarize(rawResult)
+                ?: return@addTool CallToolResult(content = listOf(TextContent("Error: Failed to get UI dump")))
+
+            if (format == "summary") {
+                val summaryText = UiDumpSummarizer.summarize(rawResult)
+                val contents = buildList {
+                    add(TextContent(summaryText))
+                    if (includeImage) {
+                        val screenshotBase64 = UiDumpSummarizer.extractScreenshot(rawResult)
+                        if (screenshotBase64 != null) {
+                            add(ImageContent(data = screenshotBase64, mimeType = "image/jpeg"))
+                        }
+                    }
+                }
+                CallToolResult(content = contents)
             } else {
-                rawResult
+                CallToolResult(content = listOf(TextContent(rawResult)))
             }
-            CallToolResult(content = listOf(TextContent(result ?: "Error: Failed to get UI dump")))
         }
 
         mcpServer.addTool(
