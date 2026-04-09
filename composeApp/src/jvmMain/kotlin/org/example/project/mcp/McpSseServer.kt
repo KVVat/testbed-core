@@ -39,6 +39,11 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
+import kotlinx.serialization.json.putJsonArray
+import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import org.example.project.adb.AdbObserver
 import org.example.project.AppViewModel
 import kotlinx.coroutines.launch
@@ -116,7 +121,14 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "junit_test_execute",
-            description = "Starts execution of the specified test class or method."
+            description = "Starts execution of the specified test class or method.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("class_name") { put("type", "string"); put("description", "Fully qualified test class name") }
+                    putJsonObject("method_name") { put("type", "string"); put("description", "Optional: specific test method name") }
+                },
+                required = listOf("class_name")
+            )
         ) { request ->
             val args = request.params.arguments
             val className = args?.get("class_name")?.jsonPrimitive?.contentOrNull 
@@ -129,7 +141,12 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "junit_test_receive",
-            description = "Retrieves test execution results (Pass/Fail/Error info, stacktrace, etc) in JSON. Returns interim logs and progress if Running."
+            description = "Retrieves test execution results (Pass/Fail/Error info, stacktrace, etc) in JSON. Returns interim logs and progress if Running.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("last_log_index") { put("type", "integer"); put("description", "Index to retrieve only new logs since last call. Default 0.") }
+                }
+            )
         ) { request ->
             val args = request.params.arguments
             val lastLogIndex = args?.get("last_log_index")?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
@@ -154,7 +171,13 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "start_stream",
-            description = "Start screenshot stream. Optional parameters: 'fps' (Float, default 1.0) and 'image_quality' (Int: 1=100% size/80% jpeg, 2=50% size/50% jpeg, 3=33% size/33% jpeg, 4=25% size/20% jpeg. Default is 2)."
+            description = "Start screenshot stream. Optional parameters: 'fps' (Float, default 1.0) and 'image_quality' (Int: 1=100% size/80% jpeg, 2=50% size/50% jpeg, 3=33% size/33% jpeg, 4=25% size/20% jpeg. Default is 2).",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("fps") { put("type", "number"); put("description", "Frames per second. Default 1.0") }
+                    putJsonObject("image_quality") { put("type", "integer"); put("description", "1=100%/80%jpeg, 2=50%/50%jpeg, 3=33%/33%jpeg, 4=25%/20%jpeg. Default 2") }
+                }
+            )
         ) { request ->
             val args = request.params.arguments ?: emptyMap()
             val fps = args["fps"]?.jsonPrimitive?.contentOrNull?.toFloatOrNull() ?: 1f
@@ -182,7 +205,13 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "get_ui_dump",
-            description = "Retrieves the current UI hierarchy (JSON) and screenshot image (Base64). Optional: 'include_image' (Boolean, default false) and 'image_quality' (Int: 1=100% size/80% jpeg, 2=50% size/50% jpeg, 3=33% size/33% jpeg, 4=25% size/20% jpeg. Default 2)."
+            description = "Retrieves the current UI hierarchy (JSON) and screenshot image (Base64). Optional: 'include_image' (Boolean, default false) and 'image_quality' (Int: 1=100% size/80% jpeg, 2=50% size/50% jpeg, 3=33% size/33% jpeg, 4=25% size/20% jpeg. Default 2).",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("include_image") { put("type", "boolean"); put("description", "Include Base64 screenshot. Default false") }
+                    putJsonObject("image_quality") { put("type", "integer"); put("description", "1=100%, 2=50%, 3=33%, 4=25%. Default 2") }
+                }
+            )
         ) { request ->
             val args = request.params.arguments ?: emptyMap()
             val includeImage = args["include_image"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: false
@@ -202,7 +231,14 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "tap",
-            description = "Physically taps the specified (x, y) coordinates. *Automatically waits for idle and returns the latest UI dump after execution."
+            description = "Physically taps the specified (x, y) coordinates. *Automatically waits for idle and returns the latest UI dump after execution.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("x") { put("type", "integer"); put("description", "X coordinate to tap") }
+                    putJsonObject("y") { put("type", "integer"); put("description", "Y coordinate to tap") }
+                },
+                required = listOf("x", "y")
+            )
         ) { request ->
             val args = request.params.arguments ?: emptyMap()
             val x = args["x"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
@@ -213,7 +249,14 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "input_text",
-            description = "Inputs text into the currently focused input field. *Automatically waits for idle and returns the latest UI dump after execution."
+            description = "Inputs text into the currently focused input field. *Automatically waits for idle and returns the latest UI dump after execution.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("text") { put("type", "string"); put("description", "Text to input (ASCII only)") }
+                    putJsonObject("press_enter") { put("type", "boolean"); put("description", "Press Enter after input. Default true") }
+                },
+                required = listOf("text")
+            )
         ) { request ->
             val args = request.params.arguments ?: emptyMap()
             val text = args["text"]?.jsonPrimitive?.contentOrNull ?: ""
@@ -224,7 +267,16 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "swipe",
-            description = "Swipes (scrolls) the screen between the specified coordinates. *Automatically waits for idle and returns the latest UI dump after execution."
+            description = "Swipes (scrolls) the screen between the specified coordinates. *Automatically waits for idle and returns the latest UI dump after execution.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("start_x") { put("type", "integer"); put("description", "Start X coordinate") }
+                    putJsonObject("start_y") { put("type", "integer"); put("description", "Start Y coordinate") }
+                    putJsonObject("end_x") { put("type", "integer"); put("description", "End X coordinate") }
+                    putJsonObject("end_y") { put("type", "integer"); put("description", "End Y coordinate") }
+                },
+                required = listOf("start_x", "start_y", "end_x", "end_y")
+            )
         ) { request ->
             val args = request.params.arguments ?: emptyMap()
             val sx = args["start_x"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
@@ -237,7 +289,13 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "press_key",
-            description = "Sends a physical or system key event. *Automatically waits for idle and returns the latest UI dump after execution."
+            description = "Sends a physical or system key event. *Automatically waits for idle and returns the latest UI dump after execution.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("keycode") { put("type", "string"); put("description", "Key name: HOME, BACK, ENTER, POWER, VOLUME_UP, VOLUME_DOWN, etc. Or numeric keycode as string.") }
+                },
+                required = listOf("keycode")
+            )
         ) { request ->
             val args = request.params.arguments ?: emptyMap()
             val keycode = args["keycode"]?.jsonPrimitive?.contentOrNull ?: ""
@@ -255,7 +313,13 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "execute_adb_shell",
-            description = "Executes an adb shell command directly against the connected device. e.g. ls -l /sdcard"
+            description = "Executes an adb shell command directly against the connected device. e.g. ls -l /sdcard",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("command") { put("type", "string"); put("description", "Shell command to execute") }
+                },
+                required = listOf("command")
+            )
         ) { request ->
             val args = request.params.arguments ?: emptyMap()
             val command = args["command"]?.jsonPrimitive?.contentOrNull ?: ""
@@ -277,7 +341,14 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "open_settings",
-            description = "Opens a specific settings panel on the device."
+            description = "Opens a specific settings panel on the device.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("panel") { put("type", "string"); put("description", "Panel name: ROOT, SECURITY, WIFI, DEVELOPER, APP_DETAILS") }
+                    putJsonObject("package_name") { put("type", "string"); put("description", "Required for APP_DETAILS panel") }
+                },
+                required = listOf("panel")
+            )
         ) { request ->
             val args = request.params.arguments ?: emptyMap()
             val panel = args["panel"]?.jsonPrimitive?.contentOrNull ?: ""
@@ -292,7 +363,14 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "push_file",
-            description = "Pushes a file from the host PC to the device."
+            description = "Pushes a file from the host PC to the device.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("host_path") { put("type", "string"); put("description", "Absolute path on host PC") }
+                    putJsonObject("device_path") { put("type", "string"); put("description", "Absolute path on device") }
+                },
+                required = listOf("host_path", "device_path")
+            )
         ) { request ->
             val args = request.params.arguments ?: emptyMap()
             val hostPath = args["host_path"]?.jsonPrimitive?.contentOrNull ?: ""
@@ -307,7 +385,14 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "pull_file",
-            description = "Pulls a file from the device to the host PC."
+            description = "Pulls a file from the device to the host PC.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("device_path") { put("type", "string"); put("description", "Absolute path on device") }
+                    putJsonObject("host_path") { put("type", "string"); put("description", "Absolute path on host PC") }
+                },
+                required = listOf("device_path", "host_path")
+            )
         ) { request ->
             val args = request.params.arguments ?: emptyMap()
             val devicePath = args["device_path"]?.jsonPrimitive?.contentOrNull ?: ""
@@ -322,7 +407,14 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "install_app",
-            description = "Installs an APK from the host PC to the device."
+            description = "Installs an APK from the host PC to the device.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("apk_path") { put("type", "string"); put("description", "Absolute path to APK on host PC") }
+                    putJsonObject("reinstall") { put("type", "boolean"); put("description", "Reinstall if already installed. Default true") }
+                },
+                required = listOf("apk_path")
+            )
         ) { request ->
             val args = request.params.arguments ?: emptyMap()
             val apkPath = args["apk_path"]?.jsonPrimitive?.contentOrNull ?: ""
@@ -337,7 +429,14 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "uninstall_app",
-            description = "Uninstalls an app from the device."
+            description = "Uninstalls an app from the device.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("package_name") { put("type", "string"); put("description", "Package name to uninstall") }
+                    putJsonObject("keep_data") { put("type", "boolean"); put("description", "Keep app data after uninstall. Default false") }
+                },
+                required = listOf("package_name")
+            )
         ) { request ->
             val args = request.params.arguments ?: emptyMap()
             val packageName = args["package_name"]?.jsonPrimitive?.contentOrNull ?: ""
@@ -360,7 +459,16 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "get_logcat",
-            description = "Retrieves filtered Logcat lines. (Essential for saving tokens)"
+            description = "Retrieves filtered Logcat lines. (Essential for saving tokens)",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("tags") { put("type", "array"); putJsonObject("items") { put("type", "string") }; put("description", "Log tag names to filter by") }
+                    putJsonObject("level") { put("type", "string"); put("description", "Minimum log level: V, D, I, W, E, F. Default V") }
+                    putJsonObject("grep_pattern") { put("type", "string"); put("description", "Grep pattern for filtering") }
+                    putJsonObject("max_lines") { put("type", "integer"); put("description", "Maximum lines to return. Default 100") }
+                    putJsonObject("process") { put("type", "string"); put("description", "Filter by process: package name (e.g. com.android.settings) or PID. Package names are auto-resolved to PID.") }
+                }
+            )
         ) { request ->
             val args = request.params.arguments ?: emptyMap()
             val tags = args["tags"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()

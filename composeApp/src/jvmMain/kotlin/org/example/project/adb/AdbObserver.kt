@@ -678,14 +678,20 @@ class AdbObserver(private val viewModel: AppViewModel) {
     }
 
     suspend fun pressKey(keycode: String): String? {
-        val jsonCmd = "{\"cmd\":\"press_key\",\"keycode\":\"$keycode\"}"
-        viewModel.log("Agent", "Requesting press_key: $keycode", LogLevel.INFO)
-        val response = sendToAgent(jsonCmd, silent = true)
-        if (response == null || response.contains("\"status\":\"error\"")) {
-            viewModel.log("Agent", "Press Key failed: $response", LogLevel.ERROR)
-            return null
+        if (!viewModel.uiState.value.adbIsValid) return null
+        return withContext(Dispatchers.IO) {
+            try {
+                val serial = adb.deviceSerial
+                val keycodeArg = if (keycode.startsWith("KEYCODE_")) keycode else "KEYCODE_$keycode"
+                viewModel.log("Agent", "Pressing key via adb: $keycodeArg", LogLevel.INFO)
+                adb.adb.execute(ShellCommandRequest("input keyevent $keycodeArg"), serial)
+                kotlinx.coroutines.delay(500)
+                dumpMuttonAgent(includeImage = false)
+            } catch (e: Exception) {
+                viewModel.log("Agent", "Press key failed: ${e.message}", LogLevel.ERROR)
+                null
+            }
         }
-        return dumpMuttonAgent(includeImage = false)
     }
 
     suspend fun inputText(text: String, pressEnter: Boolean = true): String? {
