@@ -205,19 +205,26 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "get_ui_dump",
-            description = "Retrieves the current UI hierarchy (JSON) and screenshot image (Base64). Optional: 'include_image' (Boolean, default false) and 'image_quality' (Int: 1=100% size/80% jpeg, 2=50% size/50% jpeg, 3=33% size/33% jpeg, 4=25% size/20% jpeg. Default 2).",
+            description = "Retrieves the current UI hierarchy. Default format is 'summary' (compact flat list optimized for LLMs, ~1KB). Use format='json' for full tree with optional Base64 screenshot.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
-                    putJsonObject("include_image") { put("type", "boolean"); put("description", "Include Base64 screenshot. Default false") }
+                    putJsonObject("format") { put("type", "string"); put("description", "Output format: 'summary' (compact flat list, default) or 'json' (full tree)") }
+                    putJsonObject("include_image") { put("type", "boolean"); put("description", "Include Base64 screenshot (only with format='json'). Default false") }
                     putJsonObject("image_quality") { put("type", "integer"); put("description", "1=100%, 2=50%, 3=33%, 4=25%. Default 2") }
                 }
             )
         ) { request ->
             val args = request.params.arguments ?: emptyMap()
-            val includeImage = args["include_image"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: false
+            val format = args["format"]?.jsonPrimitive?.contentOrNull ?: "summary"
+            val includeImage = if (format == "summary") false else (args["include_image"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: false)
             val quality = args["image_quality"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 2
-            
-            val result = adbObserver.dumpMuttonAgent(includeImage, quality)
+
+            val rawResult = adbObserver.dumpMuttonAgent(includeImage, quality)
+            val result = if (format == "summary" && rawResult != null) {
+                UiDumpSummarizer.summarize(rawResult)
+            } else {
+                rawResult
+            }
             CallToolResult(content = listOf(TextContent(result ?: "Error: Failed to get UI dump")))
         }
 
@@ -243,7 +250,8 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
             val args = request.params.arguments ?: emptyMap()
             val x = args["x"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
             val y = args["y"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
-            val result = adbObserver.tapCoordinate(x, y)
+            val rawResult = adbObserver.tapCoordinate(x, y)
+            val result = if (rawResult != null) UiDumpSummarizer.summarizeInteractable(rawResult) else null
             CallToolResult(content = listOf(TextContent(result ?: "Error: Failed to tap")))
         }
 
@@ -261,7 +269,8 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
             val args = request.params.arguments ?: emptyMap()
             val text = args["text"]?.jsonPrimitive?.contentOrNull ?: ""
             val pressEnter = args["press_enter"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: true
-            val result = adbObserver.inputText(text, pressEnter)
+            val rawResult = adbObserver.inputText(text, pressEnter)
+            val result = if (rawResult != null) UiDumpSummarizer.summarizeInteractable(rawResult) else null
             CallToolResult(content = listOf(TextContent(result ?: "Error: Failed to input text")))
         }
 
@@ -283,7 +292,8 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
             val sy = args["start_y"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
             val ex = args["end_x"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
             val ey = args["end_y"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
-            val result = adbObserver.swipe(sx, sy, ex, ey)
+            val rawResult = adbObserver.swipe(sx, sy, ex, ey)
+            val result = if (rawResult != null) UiDumpSummarizer.summarizeInteractable(rawResult) else null
             CallToolResult(content = listOf(TextContent(result ?: "Error: Failed to swipe")))
         }
 
@@ -299,7 +309,8 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
         ) { request ->
             val args = request.params.arguments ?: emptyMap()
             val keycode = args["keycode"]?.jsonPrimitive?.contentOrNull ?: ""
-            val result = adbObserver.pressKey(keycode)
+            val rawResult = adbObserver.pressKey(keycode)
+            val result = if (rawResult != null) UiDumpSummarizer.summarizeInteractable(rawResult) else null
             CallToolResult(content = listOf(TextContent(result ?: "Error: Failed to press key")))
         }
 
@@ -356,7 +367,8 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
             if (panel.isEmpty()) {
                 CallToolResult(content = listOf(TextContent("Error: panel parameter is required.")))
             } else {
-                val result = adbObserver.openSettings(panel, packageName)
+                val rawResult = adbObserver.openSettings(panel, packageName)
+                val result = if (rawResult != null) UiDumpSummarizer.summarizeInteractable(rawResult) else null
                 CallToolResult(content = listOf(TextContent(result ?: "Error: Failed to open settings.")))
             }
         }
