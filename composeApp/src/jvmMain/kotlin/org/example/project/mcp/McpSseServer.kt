@@ -59,6 +59,18 @@ import io.ktor.server.application.call
 
 class McpSseServer(private val adbObserver: AdbObserver, private val appViewModel: AppViewModel) {
 
+    private var mcpServerInstance: Server? = null
+
+    private fun getMockToolsJson(idVal: String): String {
+        val toolsList = mcpServerInstance?.tools?.values?.map { it.tool } ?: emptyList()
+        val listToolsResult = io.modelcontextprotocol.kotlin.sdk.types.ListToolsResult(tools = toolsList, nextCursor = null)
+        val resultJson = kotlinx.serialization.json.Json.encodeToString(listToolsResult)
+        
+        val idStr = if (idVal.toIntOrNull() != null) idVal else "\"$idVal\""
+        
+        return """{"jsonrpc":"2.0","id":$idStr,"result":$resultJson}"""
+    }
+
 private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
     fun configureServer(): Server {
         val mcpServer = Server(
@@ -524,6 +536,7 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
         if (serverEngine != null) return
 
         val mcpServer = configureServer()
+        mcpServerInstance = mcpServer
 
         serverEngine = embeddedServer(CIO, host = host, port = port) {
             installCors()
@@ -557,14 +570,7 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
                     serverSessions[transport.sessionId] = SessionHolder(transport.sessionId, serverSession)
 
                     serverSession.onInitialized {
-                        appViewModel.viewModelScope.launch(Dispatchers.IO) {
-                            try {
-                                adbObserver.setupMuttonAgent(forceInstall = false)
-                                appViewModel.log("MCP", "Agent background verification started.")
-                            } catch (e: Exception) {
-                                appViewModel.log("MCP", "Failed during background agent verification: ${e.message}", org.example.project.LogLevel.ERROR)
-                            }
-                        }
+                        appViewModel.log("MCP", "Server session initialized for: ${transport.sessionId}")
                     }
 
                     serverSession.onClose {
@@ -653,6 +659,7 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
                 // Fallback catch-all for JetSki's weird POST requests
                 post("/mcp") {
                     val rawBody = call.receiveText()
+                    appViewModel.log("MCP", "Incoming Fallback Payload: $rawBody")
                     
                     val idMatch = "\"id\"\\s*:\\s*(\\d+|\\\".*?\\\")".toRegex().find(rawBody)
                     val idVal = idMatch?.groupValues?.get(1) ?: "1"
@@ -680,13 +687,19 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
                         return@post
                     }
 
+                    if (rawBody.contains("\"method\":\"tools/list\"") || rawBody.contains("\"method\": \"tools/list\"")) {
+                        val mockToolsResponse = getMockToolsJson(idVal)
+                        call.respondText(mockToolsResponse, io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.OK)
+                        return@post
+                    }
+
                     // Original logic for other messages
-                    var activeSessionHolder = serverSessions.values.firstOrNull()
+                    var activeSessionHolder = serverSessions.values.maxByOrNull { it.lastActivityTime }
                     var retries = 0
                     // セッションがない場合のみ最大2秒待機して探す
                     while (activeSessionHolder == null && retries < 20) {
                         kotlinx.coroutines.delay(100)
-                        activeSessionHolder = serverSessions.values.firstOrNull()
+                        activeSessionHolder = serverSessions.values.maxByOrNull { it.lastActivityTime }
                         retries++
                     }
                     
