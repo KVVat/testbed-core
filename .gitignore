@@ -44,3 +44,7 @@ repomix*
 bin/
 composeApp/plugins
 composeApp/screenshots
+
+results/
+xml-patches/
+composeApp/appsettings.properties

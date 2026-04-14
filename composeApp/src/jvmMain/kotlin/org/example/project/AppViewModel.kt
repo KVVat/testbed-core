@@ -107,6 +107,8 @@ class AppViewModel : ViewModel() {
                 TestLogLevel.WARN -> LogLevel.WARN
                 TestLogLevel.ERROR -> LogLevel.ERROR
             }
+            // Also print to System.out so it can be captured by AntXmlListener
+            System.out.println("[$level] $message")
             // The tag is fixed to PLUGIN, or obtained dynamically
             log("PLUGIN", message, internalLevel)
         }
@@ -317,7 +319,7 @@ class AppViewModel : ViewModel() {
     }
 
     private fun output_path(): String {
-        val dir = File("build/test-results").apply { mkdirs() }
+        val dir = File("results").apply { mkdirs() }
         return dir.absolutePath
     }
 
@@ -360,7 +362,7 @@ class AppViewModel : ViewModel() {
 
                     runner.addListener(UnitTestingTextListener(::logging){})
 
-                    runner.start()
+                    runner.run()
                 } finally {
                     Thread.currentThread().contextClassLoader = originalClassLoader
                 }
@@ -422,10 +424,26 @@ class AppViewModel : ViewModel() {
                 val targetClass = plugin.resolveClass()
 
                 Thread.currentThread().contextClassLoader = targetClass.classLoader
+                
+                val originalOut = System.out
+                val originalErr = System.err
+                val outCapture = java.io.ByteArrayOutputStream()
+                val errCapture = java.io.ByteArrayOutputStream()
+                
+                class TeeStream(val main: java.io.OutputStream, val branch: java.io.OutputStream) : java.io.OutputStream() {
+                    override fun write(b: Int) { main.write(b); branch.write(b) }
+                    override fun write(b: ByteArray, off: Int, len: Int) { main.write(b, off, len); branch.write(b, off, len) }
+                    override fun flush() { main.flush(); branch.flush() }
+                }
+                
+                val outPrintStream = java.io.PrintStream(TeeStream(originalOut, outCapture))
+                val errPrintStream = java.io.PrintStream(TeeStream(originalErr, errCapture))
+                System.setOut(outPrintStream)
+                System.setErr(errPrintStream)
+                
                 try {
                     val runner = JUnitTestRunner(arrayOf(targetClass), antRunner)
                     runner.methodNameToRun = methodName
-
                     runner.addListener(object : org.junit.runner.notification.RunListener() {
                         override fun testFinished(description: org.junit.runner.Description) {
                             if (mcpTestResults.none { it.method_name == description.methodName }) {
@@ -438,12 +456,18 @@ class AppViewModel : ViewModel() {
                             mcpTestResults.add(org.example.project.mcp.McpTestResult(className, failure.description.methodName, "Fail", assertionMsg, stacktrace))
                         }
                     })
-
                     runner.addListener(UnitTestingTextListener(::logging){})
-                    runner.start()
+                    runner.run()
                 } finally {
+                    outPrintStream.flush()
+                    errPrintStream.flush()
+                    System.setOut(originalOut)
+                    System.setErr(originalErr)
                     Thread.currentThread().contextClassLoader = originalClassLoader
                 }
+                
+                antRunner.setSystemOutput(outCapture.toString("UTF-8"))
+                antRunner.setSystemError(errCapture.toString("UTF-8"))
 
                 fos.flush()
             } catch (e: Exception) {
