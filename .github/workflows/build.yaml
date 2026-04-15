@@ -40,6 +40,16 @@ jobs:
         shell: bash
         run: ./gradlew :composeApp:createReleaseDistributable
 
+      - name: Build Mutton Agent
+        shell: bash
+        run: ./gradlew :tools:mutton-agent:assembleRelease
+
+      - name: Copy Agent APK to Resources
+        shell: bash
+        run: |
+          mkdir -p composeApp/build/compose/binaries/main-release/app/resources
+          cp tools/mutton-agent/build/outputs/apk/release/*-unsigned.apk composeApp/build/compose/binaries/main-release/app/resources/mutton-agent.apk || cp tools/mutton-agent/build/outputs/apk/release/*.apk composeApp/build/compose/binaries/main-release/app/resources/mutton-agent.apk
+
       - name: Prepare Artifact (Windows)
         if: ${{ matrix.os == 'windows-latest' }}
         shell: pwsh

@@ -139,6 +139,11 @@ jobs:
 
           cp -R "$app_bundle" "$out_dir/"
           cp pkg-items/README_MACOS.md "$out_dir/README.md"
+          
+          resources_dir="$(dirname "$app_bundle")/resources"
+          if [ -d "$resources_dir" ]; then
+            cp -R "$resources_dir" "$out_dir/"
+          fi
           if [ -d "$out_dir/TestbedCore.app/Contents/MacOS" ]; then
             find "$out_dir/TestbedCore.app/Contents/MacOS" -type f -exec chmod +x {} +
           fi
