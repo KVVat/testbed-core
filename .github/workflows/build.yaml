@@ -40,15 +40,7 @@ jobs:
         shell: bash
         run: ./gradlew :composeApp:createReleaseDistributable
 
-      - name: Build and Deploy Mutton Agent
-        shell: bash
-        run: ./gradlew :tools:mutton-agent:copyTestApk
 
-      - name: Copy Agent APK to Artifact Resources
-        shell: bash
-        run: |
-          mkdir -p composeApp/build/compose/binaries/main-release/app/resources
-          cp composeApp/resources/mutton-agent.apk composeApp/build/compose/binaries/main-release/app/resources/mutton-agent.apk
 
       - name: Prepare Artifact (Windows)
         if: ${{ matrix.os == 'windows-latest' }}
@@ -71,5 +63,31 @@ jobs:
         with:
           name: ${{ matrix.artifact_name }}
           path: work/artifact/**
+          if-no-files-found: error
+          retention-days: 14
+
+  build-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: "zulu"
+          java-version: "21"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build Mutton Agent
+        run: ./gradlew :tools:mutton-agent:copyTestApk
+
+      - name: Upload Agent Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutton-agent-apk
+          path: composeApp/resources/mutton-agent.apk
           if-no-files-found: error
           retention-days: 14
