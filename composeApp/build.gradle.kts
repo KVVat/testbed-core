@@ -76,6 +76,9 @@ compose.desktop {
             packageVersion = "1.0.0"
             modules("java.management", "java.naming", "jdk.unsupported", "java.sql")
             // OSごとの設定 (アイコンなどがあればここで指定可能)
+            macOS {
+                iconFile.set(project.file("src/jvmMain/composeResources/files/icon.icns"))
+            }
             windows {
                 menuGroup = "Testbed Tools"
             }

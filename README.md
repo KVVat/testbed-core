@@ -2,7 +2,7 @@
 
 TestBed Core is a **Kotlin Multiplatform Desktop Application** designed for Android device management, automation, and testing. It provides a lightweight GUI for ADB/Fastboot operations and serves as a host for running custom test plugins.
 
-![Screenshot](screenshot.png)
+![Screenshot](screenshot.jpg)
 
 ## Key Features
 
@@ -11,6 +11,7 @@ TestBed Core is a **Kotlin Multiplatform Desktop Application** designed for Andr
 * **Device Control**: One-click actions for Reboot (System/Bootloader), Screenshots, Text Input, and App Data Clearing.
 * **Logcat Monitor**: Real-time log monitoring with filtering and level selection.
 * **Test Plugin Host**: Load and execute custom JUnit-based test plugins (JARs) dynamically.
+* **MCP Server**: Built-in Model Context Protocol (SSE) server for LLM agent integration, enabling remote device control and automated test execution.
 * **Cross-Platform**: Works on Windows, macOS, and Linux.
 
 ## Getting Started (For End Users)

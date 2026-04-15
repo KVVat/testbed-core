@@ -8,8 +8,13 @@ data class LogLine(
     val message: String,
     val level: LogLevel,
     val pid: String = "", // ★追加
-    val packageName: String? = null
-)
+    val packageName: String? = null,
+    val id: Long = idGenerator.getAndIncrement()
+) {
+    companion object {
+        private val idGenerator = java.util.concurrent.atomic.AtomicLong(0)
+    }
+}
 
 enum class LogLevel {
     INFO, DEBUG, ERROR, PASS,WARN

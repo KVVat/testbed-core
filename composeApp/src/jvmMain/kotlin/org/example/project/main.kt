@@ -5,6 +5,12 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import androidx.compose.ui.window.WindowPlacement
+import org.jetbrains.compose.resources.painterResource
+import testbed_core.composeapp.generated.resources.Res
+import testbed_core.composeapp.generated.resources.icon
+import java.awt.Taskbar
+import javax.imageio.ImageIO
+import java.io.File
 
 import kotlin.system.exitProcess
 
@@ -25,8 +31,23 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-fun main() = application {
-    val windowState = rememberWindowState()
+fun main() {
+    try {
+        if (Taskbar.isTaskbarSupported()) {
+            val taskbar = Taskbar.getTaskbar()
+            if (taskbar.isSupported(Taskbar.Feature.ICON_IMAGE)) {
+                val iconFile = File("icon1024x1024.png")
+                if (iconFile.exists()) {
+                    taskbar.iconImage = ImageIO.read(iconFile)
+                }
+            }
+        }
+    } catch (e: Exception) {
+        // Ignore
+    }
+
+    application {
+        val windowState = rememberWindowState()
 
     Window(
         onCloseRequest = {
@@ -35,6 +56,7 @@ fun main() = application {
         },
         state = windowState,
         title = "Testbed Core",
+        icon = painterResource(Res.drawable.icon),
         undecorated = true,
         transparent = true
     ) {
@@ -108,4 +130,5 @@ fun main() = application {
             }
         }
     }
+}
 }

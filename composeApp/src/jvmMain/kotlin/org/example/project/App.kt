@@ -454,7 +454,7 @@ fun LogConsole(logs: List<LogLine>, modifier: Modifier = Modifier) {
                     state = listState,
                     modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp)
                 ) {
-                    items(filteredLogs) { log ->
+                    items(filteredLogs, key = { it.id }) { log ->
                         LogLineItem(log)
                     }
                 }
@@ -569,6 +569,7 @@ fun SettingsDialog(
     var bufferSizeText by remember { mutableStateOf(currentSettings.logcatBufferSize.toString()) }
     var pastMinutesText by remember { mutableStateOf(currentSettings.logcatPastMinutes.toString()) }
     var mcpHost by remember { mutableStateOf(currentSettings.mcpServerHost) }
+    var useFallback by remember { mutableStateOf(currentSettings.useMcpFallback) }
 
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -661,6 +662,18 @@ fun SettingsDialog(
                     Text("127.0.0.1 (IPv4 Localhost)", color = Color.White, fontSize = 14.sp)
                 }
 
+                Spacer(Modifier.height(16.dp))
+
+                // MCP Fallbackチェックボックス
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = useFallback,
+                        onCheckedChange = { useFallback = it },
+                        colors = CheckboxDefaults.colors(checkedColor = Color(0xFF569CD6))
+                    )
+                    Text("Enable MCP Fallback (for single client)", color = Color.White, fontSize = 14.sp)
+                }
+
                 Spacer(Modifier.height(24.dp))
 
                 // ボタン類
@@ -677,7 +690,7 @@ fun SettingsDialog(
                         onClick = {
                             val bufferSize = bufferSizeText.toIntOrNull() ?: currentSettings.logcatBufferSize
                             val pastMinutes = pastMinutesText.toIntOrNull() ?: currentSettings.logcatPastMinutes
-                            onSave(AppSettings(autoOpen, bufferSize, pastMinutes, mcpHost))
+                            onSave(AppSettings(autoOpen, bufferSize, pastMinutes, mcpHost, useFallback))
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF569CD6))
                     ) {

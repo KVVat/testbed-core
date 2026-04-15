@@ -311,7 +311,7 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
                                     modifier = Modifier.fillMaxSize(),
                                     contentPadding = PaddingValues(bottom = 8.dp)
                                 ) {
-                                    items(filteredLogs) { log ->
+                                    items(filteredLogs, key = { it.id }) { log ->
                                         if (isCompactMode) {
                                             CompactLogItem(log,isSoftWrap)
                                         } else {

@@ -43,7 +43,8 @@ data class AppSettings(
     val autoOpenLogcat: Boolean = true,
     val logcatBufferSize: Int = 2000,
     val logcatPastMinutes: Int = 10,
-    val mcpServerHost: String = "0.0.0.0"
+    val mcpServerHost: String = "0.0.0.0",
+    val useMcpFallback: Boolean = true
 )
 
 class AppViewModel : ViewModel() {
@@ -89,9 +90,25 @@ class AppViewModel : ViewModel() {
     var currentTestStep: String = ""
     var currentTestProgress: Int = 0
     private val logRecorder = LogRecorder(baseFileName = "logcat.log")
-    private val PLUGINS_DIR = File("plugins")
+    private val baseDir: File = run {
+        val resourcesDirProp = System.getProperty("compose.application.resources.dir")
+        if (resourcesDirProp != null) {
+            var candidate = File(resourcesDirProp)
+            while (candidate != null && !candidate.name.endsWith(".app")) {
+                candidate = candidate.parentFile
+            }
+            if (candidate != null && candidate.name.endsWith(".app")) {
+                return@run candidate.parentFile ?: candidate
+            }
+            val resFile = File(resourcesDirProp)
+            return@run resFile.parentFile?.parentFile?.parentFile ?: File(".")
+        }
+        File(".").absoluteFile
+    }
 
-    private val SETTINGS_FILE = File("app_settings.properties")
+    private val PLUGINS_DIR = File(baseDir, "plugins")
+
+    private val SETTINGS_FILE = File(baseDir, "app_settings.properties")
     private val _appSettings = MutableStateFlow(AppSettings())
     val appSettings = _appSettings.asStateFlow()
 
@@ -117,9 +134,8 @@ class AppViewModel : ViewModel() {
             currentTestProgress = percent
         }
 
-        val currentDir = File(".").absolutePath
-        JUnitBridge.resourceDir = File(currentDir, "resources").absolutePath
-        JUnitBridge.configFilePath = File(currentDir, "config/settings.json").absolutePath
+        JUnitBridge.resourceDir = File(baseDir, "resources").absolutePath
+        JUnitBridge.configFilePath = File(baseDir, "config/settings.json").absolutePath
 
         // Load JARs from the plugin directory on startup
         loadPluginsFromDir()
@@ -133,7 +149,8 @@ class AppViewModel : ViewModel() {
                     autoOpenLogcat = props.getProperty("autoOpenLogcat", "true").toBoolean(),
                     logcatBufferSize = props.getProperty("logcatBufferSize", "30000").toIntOrNull() ?: 30000,
                     logcatPastMinutes = props.getProperty("logcatPastMinutes", "10").toIntOrNull() ?: 10,
-                    mcpServerHost = props.getProperty("mcpServerHost", "0.0.0.0")
+                    mcpServerHost = props.getProperty("mcpServerHost", "0.0.0.0"),
+                    useMcpFallback = props.getProperty("useMcpFallback", "true").toBoolean()
                 )
             } catch (e: Exception) {
                 log("SYSTEM", "Failed to load settings: ${e.message}", LogLevel.ERROR)
@@ -150,6 +167,7 @@ class AppViewModel : ViewModel() {
                 setProperty("logcatBufferSize", newSettings.logcatBufferSize.toString())
                 setProperty("logcatPastMinutes", newSettings.logcatPastMinutes.toString())
                 setProperty("mcpServerHost", newSettings.mcpServerHost)
+                setProperty("useMcpFallback", newSettings.useMcpFallback.toString())
             }
             props.store(SETTINGS_FILE.outputStream(), "App Settings")
             log("SYSTEM", "Settings saved.", LogLevel.INFO)
@@ -319,7 +337,7 @@ class AppViewModel : ViewModel() {
     }
 
     private fun output_path(): String {
-        val dir = File("results").apply { mkdirs() }
+        val dir = File(baseDir, "results").apply { mkdirs() }
         return dir.absolutePath
     }
 

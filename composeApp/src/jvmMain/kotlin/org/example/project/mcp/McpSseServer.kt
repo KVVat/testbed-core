@@ -648,16 +648,20 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
                             call.respondText(mockResponse, io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.OK)
                         } else {
                             // ダミーのNotification（id無し）を返すことで、同期Promiseを消費せず、デコーダーのエラーを回避
-                            call.respondText("""{"jsonrpc": "2.0", "method": "dummy"}""", io.ktor.http.ContentType.Application.Json, HttpStatusCode.Accepted)
+                            call.respondText("""{"jsonrpc": "2.0", "method": "dummy"}""", io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.Accepted)
                         }
                     } catch (e: Exception) {
                         appViewModel.log("MCP", "Error handling message: ${e.message}")
-                        call.respondText("{\"error\":\"Error handling message\"}", io.ktor.http.ContentType.Application.Json, HttpStatusCode.BadRequest)
+                        call.respondText("{\"error\":\"Error handling message\"}", io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.BadRequest)
                     }
                 }
-                
+
                 // Fallback catch-all for JetSki's weird POST requests
                 post("/mcp") {
+                    if (!appViewModel.appSettings.value.useMcpFallback) {
+                        call.respondText("Fallback disabled", io.ktor.http.ContentType.Text.Plain, io.ktor.http.HttpStatusCode.NotFound)
+                        return@post
+                    }
                     val rawBody = call.receiveText()
                     appViewModel.log("MCP", "Incoming Fallback Payload: $rawBody")
                     
