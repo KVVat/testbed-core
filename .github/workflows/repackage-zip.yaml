@@ -93,6 +93,11 @@ jobs:
 
           $AppRoot = Split-Path -Path $Exe.FullName -Parent
           Copy-Item -Path "$AppRoot\*" -Destination $OutDir -Recurse -Force
+          
+          $ResourcesDir = Join-Path (Split-Path -Path $AppRoot -Parent) "resources"
+          if (Test-Path $ResourcesDir) {
+              Copy-Item -Path $ResourcesDir -Destination $OutDir -Recurse -Force
+          }
 
           Copy-Item -Path "scripts/setup_tools.bat" -Destination "$OutDir\scripts\setup_tools.bat" -Force
           Copy-Item -Path "pkg-items/testbed-windows.bat" -Destination "$OutDir\testbed-windows.bat" -Force
@@ -114,6 +119,11 @@ jobs:
 
           app_dir="$(dirname "$(dirname "$exe_path")")"
           cp -R "$app_dir" "$out_dir/main-release/app/"
+          
+          resources_dir="$(dirname "$app_dir")/resources"
+          if [ -d "$resources_dir" ]; then
+            cp -R "$resources_dir" "$out_dir/main-release/app/"
+          fi
           cp scripts/setup_tools.sh "$out_dir/scripts/setup_tools.sh"
           cp pkg-items/testbed-ubuntu.sh "$out_dir/testbed-ubuntu.sh"
           cp pkg-items/README_UBUNTU.md "$out_dir/README.md"
