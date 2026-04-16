@@ -60,13 +60,7 @@ jobs:
           name: ${{ matrix.build_artifact }}
           path: work/raw
 
-      - name: Download Agent Artifact
-        uses: actions/download-artifact@v4
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ steps.build_run.outputs.id }}
-          name: mutton-agent-apk
-          path: work/agent
+
 
       - name: Extract Build Archive (Linux/macOS)
         if: ${{ matrix.os != 'windows-latest' }}
@@ -102,8 +96,7 @@ jobs:
           $AppRoot = Split-Path -Path $Exe.FullName -Parent
           Copy-Item -Path "$AppRoot\*" -Destination $OutDir -Recurse -Force
           
-          New-Item -ItemType Directory -Force -Path "$OutDir\resources" | Out-Null
-          Copy-Item -Path "work/agent/mutton-agent.apk" -Destination "$OutDir\resources\mutton-agent.apk" -Force
+
 
           Copy-Item -Path "scripts/setup_tools.bat" -Destination "$OutDir\scripts\setup_tools.bat" -Force
           Copy-Item -Path "pkg-items/testbed-windows.bat" -Destination "$OutDir\testbed-windows.bat" -Force
@@ -126,8 +119,7 @@ jobs:
           app_dir="$(dirname "$(dirname "$exe_path")")"
           cp -R "$app_dir" "$out_dir/main-release/app/"
           
-          mkdir -p "$out_dir/main-release/app/resources"
-          cp work/agent/mutton-agent.apk "$out_dir/main-release/app/resources/mutton-agent.apk"
+
           cp scripts/setup_tools.sh "$out_dir/scripts/setup_tools.sh"
           cp pkg-items/testbed-ubuntu.sh "$out_dir/testbed-ubuntu.sh"
           cp pkg-items/README_UBUNTU.md "$out_dir/README.md"
@@ -154,8 +146,7 @@ jobs:
           cp -R "$app_bundle" "$out_dir/"
           cp pkg-items/README_MACOS.md "$out_dir/README.md"
           
-          mkdir -p "$out_dir/resources"
-          cp work/agent/mutton-agent.apk "$out_dir/resources/mutton-agent.apk"
+
           if [ -d "$out_dir/TestbedCore.app/Contents/MacOS" ]; then
             find "$out_dir/TestbedCore.app/Contents/MacOS" -type f -exec chmod +x {} +
           fi

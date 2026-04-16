@@ -96,4 +96,6 @@ compose.desktop {
 
 afterEvaluate {
     tasks.findByName("run")?.dependsOn(":tools:mutton-agent:copyTestApk")
+    tasks.findByName("jvmProcessResources")?.dependsOn(":tools:mutton-agent:copyTestApk")
+    tasks.findByName("createReleaseDistributable")?.dependsOn(":tools:mutton-agent:copyTestApk")
 }

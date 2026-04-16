@@ -68,7 +68,7 @@ val copyTestApk = tasks.register("copyTestApk", Copy::class) {
     from(layout.buildDirectory.dir("outputs/apk/androidTest/debug/"))
     include("mutton-agent-debug-androidTest.apk")
 
-    val deployTargetDir = file("${rootProject.projectDir}/composeApp/resources")
+    val deployTargetDir = file("${rootProject.projectDir}/composeApp/src/jvmMain/resources")
     if (!deployTargetDir.exists()) {
         deployTargetDir.mkdirs()
     }

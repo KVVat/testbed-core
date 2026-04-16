@@ -91,18 +91,28 @@ class AppViewModel : ViewModel() {
     var currentTestProgress: Int = 0
     private val logRecorder = LogRecorder(baseFileName = "logcat.log")
     private val baseDir: File = run {
-        val resourcesDirProp = System.getProperty("compose.application.resources.dir")
-        if (resourcesDirProp != null) {
-            var candidate = File(resourcesDirProp)
-            while (candidate != null && !candidate.name.endsWith(".app")) {
-                candidate = candidate.parentFile
+        val os = System.getProperty("os.name").lowercase()
+        
+        // Mac環境で、かつ .app バンドル内から実行されている場合
+        if (os.contains("mac")) {
+            val codeSource = AppViewModel::class.java.protectionDomain.codeSource
+            val location = codeSource?.location
+            if (location != null) {
+                val path = File(location.toURI()).absolutePath
+                if (path.contains(".app")) {
+                    val userHome = System.getProperty("user.home")
+                    val appSupportDir = File(userHome, "Library/Application Support/TestbedCore")
+                    
+                    // ディレクトリが存在しない場合は作成
+                    if (!appSupportDir.exists()) {
+                        appSupportDir.mkdirs()
+                    }
+                    return@run appSupportDir
+                }
             }
-            if (candidate != null && candidate.name.endsWith(".app")) {
-                return@run candidate.parentFile ?: candidate
-            }
-            val resFile = File(resourcesDirProp)
-            return@run resFile.parentFile?.parentFile?.parentFile ?: File(".")
         }
+        
+        // デフォルト（Windows, Linux, 開発時）はカレントディレクトリ
         File(".").absoluteFile
     }
 
@@ -112,7 +122,43 @@ class AppViewModel : ViewModel() {
     private val _appSettings = MutableStateFlow(AppSettings())
     val appSettings = _appSettings.asStateFlow()
 
+    private fun extractDefaultAgentIfNeeded() {
+        val resourcesDir = File(baseDir, "resources")
+        if (!resourcesDir.exists()) {
+            resourcesDir.mkdirs()
+        }
+        val agentFile = File(resourcesDir, "mutton-agent.apk")
+        
+        val resourceUrl = AppViewModel::class.java.classLoader.getResource("mutton-agent.apk")
+        if (resourceUrl != null) {
+            val resourceConnection = resourceUrl.openConnection()
+            val resourceLastModified = resourceConnection.lastModified
+            
+            val shouldCopy = if (!agentFile.exists()) {
+                true
+            } else {
+                // リソースの更新日時がファイルの更新日時より新しい場合は上書き
+                val fileLastModified = agentFile.lastModified()
+                resourceLastModified > fileLastModified
+            }
+            
+            if (shouldCopy) {
+                log("APP", "Extracting default agent APK to ${agentFile.absolutePath}", LogLevel.INFO)
+                resourceUrl.openStream().use { input ->
+                    agentFile.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                // ファイルの更新日時をリソースと合わせる
+                agentFile.setLastModified(resourceLastModified)
+            }
+        } else {
+            log("APP", "Default agent APK not found in resources", LogLevel.WARN)
+        }
+    }
+
     init {
+        extractDefaultAgentIfNeeded()
         loadSettings()
         startAdbObservation()
         mcpServer.start(host = _appSettings.value.mcpServerHost)
