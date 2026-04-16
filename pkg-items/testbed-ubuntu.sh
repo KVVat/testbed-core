@@ -26,7 +26,7 @@ adb version
 EXE_PATH="$SCRIPT_DIR/main-release/app/TestbedCore/bin/TestbedCore"
 
 if [ -f "$EXE_PATH" ]; then
-  　chmod +x "$EXE_PATH"
+    chmod +x "$EXE_PATH"
     echo "[Launcher] Starting TestBed Core..."
     "$EXE_PATH" &
 else

@@ -89,7 +89,6 @@ class AppViewModel : ViewModel() {
     val mcpTestLogs = java.util.concurrent.CopyOnWriteArrayList<Map<String, String>>()
     var currentTestStep: String = ""
     var currentTestProgress: Int = 0
-    private val logRecorder = LogRecorder(baseFileName = "logcat.log")
     private val baseDir: File = run {
         val os = System.getProperty("os.name").lowercase()
         
@@ -116,11 +115,22 @@ class AppViewModel : ViewModel() {
         File(".").absoluteFile
     }
 
+    private val logRecorder = LogRecorder(baseFileName = File(baseDir, "logcat.log").absolutePath)
+
     private val PLUGINS_DIR = File(baseDir, "plugins")
 
     private val SETTINGS_FILE = File(baseDir, "app_settings.properties")
     private val _appSettings = MutableStateFlow(AppSettings())
     val appSettings = _appSettings.asStateFlow()
+
+    private val _snackbarMessage = MutableSharedFlow<String>()
+    val snackbarMessage = _snackbarMessage.asSharedFlow()
+
+    fun showSnackbar(message: String) {
+        viewModelScope.launch {
+            _snackbarMessage.emit(message)
+        }
+    }
 
     private fun extractDefaultAgentIfNeeded() {
         val resourcesDir = File(baseDir, "resources")
@@ -182,6 +192,8 @@ class AppViewModel : ViewModel() {
 
         JUnitBridge.resourceDir = File(baseDir, "resources").absolutePath
         JUnitBridge.configFilePath = File(baseDir, "config/settings.json").absolutePath
+        JUnitBridge.resultsDir = File(baseDir, "results").absolutePath
+        JUnitBridge.baseDir = baseDir.absolutePath
 
         // Load JARs from the plugin directory on startup
         loadPluginsFromDir()
@@ -229,6 +241,71 @@ class AppViewModel : ViewModel() {
     }
 
     /**
+     * Opens the results directory in the OS file manager.
+     */
+    fun openResultsDirectory() {
+        val resultsDir = File(baseDir, "results")
+        if (!resultsDir.exists()) {
+            resultsDir.mkdirs()
+        }
+        try {
+            java.awt.Desktop.getDesktop().open(resultsDir)
+        } catch (e: Exception) {
+            log("SYSTEM", "Failed to open results directory: ${e.message}", LogLevel.ERROR)
+        }
+    }
+
+    /**
+     * Imports a plugin from a ZIP file, extracting resources and plugins folders.
+     */
+    fun importPluginZip(zipFile: File) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                log("SYSTEM", "Importing plugin from ${zipFile.name}...", LogLevel.INFO)
+                java.util.zip.ZipFile(zipFile).use { zip ->
+                    val entries = zip.entries()
+                    while (entries.hasMoreElements()) {
+                        val entry = entries.nextElement()
+                        val entryName = entry.name
+                        
+                        // 対象のパスを決定
+                        val targetFile = when {
+                            entryName.startsWith("resources/") -> File(baseDir, entryName)
+                            entryName.startsWith("plugin/") -> {
+                                // "plugin/" を "plugins/" にマッピング
+                                val relativePath = entryName.substringAfter("plugin/")
+                                File(PLUGINS_DIR, relativePath)
+                            }
+                            entryName.startsWith("plugins/") -> File(baseDir, entryName)
+                            else -> null // ルートの他のファイルは無視
+                        }
+                        
+                        if (targetFile != null) {
+                            if (entry.isDirectory) {
+                                targetFile.mkdirs()
+                            } else {
+                                targetFile.parentFile.mkdirs()
+                                zip.getInputStream(entry).use { input ->
+                                    targetFile.outputStream().use { output ->
+                                        input.copyTo(output)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                log("SYSTEM", "Plugin imported successfully!", LogLevel.INFO)
+                showSnackbar("Plugin imported successfully!")
+                
+                // プラグイン一覧を更新
+                refreshPlugins()
+            } catch (e: Exception) {
+                log("SYSTEM", "Failed to import plugin: ${e.message}", LogLevel.ERROR)
+            }
+        }
+    }
+
+    /**
      * Scans JAR files in the plugins directory and loads test classes.
      */
     fun loadPluginsFromDir() {
@@ -239,16 +316,45 @@ class AppViewModel : ViewModel() {
         }
 
         viewModelScope.launch(Dispatchers.IO) {
-            log("SYSTEM", "Scanning for plugins in subdirectories...", LogLevel.INFO)
+            log("SYSTEM", "Scanning for plugins...", LogLevel.INFO)
 
-            // Use walk() to recursively search for JARs in subdirectories
-            val jarFiles = PLUGINS_DIR.walk()
-                .filter { it.isFile && it.extension == "jar" }
-                .toList()
+            val jarFiles = mutableListOf<File>()
+            val rawJarFiles = mutableListOf<File>()
+            
+            // 1. 基準ディレクトリのpluginsを検索 (通常は ./plugins)
+            if (PLUGINS_DIR.exists()) {
+                rawJarFiles.addAll(PLUGINS_DIR.walk().filter { it.isFile && it.extension == "jar" })
+            }
+            
+            // 同名のファイルを排除（浅い階層を優先するため、パスの長さでソート）
+            rawJarFiles.sortBy { it.absolutePath.length }
+            rawJarFiles.forEach { file ->
+                if (jarFiles.none { it.name == file.name }) {
+                    jarFiles.add(file)
+                } else {
+                    log("SYSTEM", "Duplicate plugin ignored: ${file.absolutePath}", LogLevel.WARN)
+                }
+            }
+            
+            // 2. 開発時用に composeApp/plugins も検索
+            val devPluginsDir = File("composeApp/plugins")
+            if (devPluginsDir.exists() && devPluginsDir.absolutePath != PLUGINS_DIR.absolutePath) {
+                val devJars = devPluginsDir.walk().filter { it.isFile && it.extension == "jar" }.toList()
+                // 同名のファイルがない場合のみ追加
+                devJars.forEach { file ->
+                    if (jarFiles.none { it.name == file.name }) {
+                        jarFiles.add(file)
+                    } else {
+                        log("SYSTEM", "Duplicate dev plugin ignored: ${file.absolutePath}", LogLevel.WARN)
+                    }
+                }
+            }
 
             if (jarFiles.isEmpty()) {
-                log("SYSTEM", "No plugin JARs found in ${PLUGINS_DIR.name}", LogLevel.INFO)
+                log("SYSTEM", "No plugin JARs found. Checked ${PLUGINS_DIR.absolutePath}", LogLevel.INFO)
                 return@launch
+            } else {
+                log("SYSTEM", "Found ${jarFiles.size} plugin JARs", LogLevel.INFO)
             }
             var loadedCount = 0 // ★追加: ロードできた件数をカウント
             jarFiles.forEach { jarFile ->
@@ -266,13 +372,41 @@ class AppViewModel : ViewModel() {
                                             val shortName = className.substringAfterLast('.')
 
                                             if (_testPlugins.none { it.className == className && it.jarFile == jarFile }) {
+                                                // アノテーションを読み込むためにクラスをロード
+                                                var title = ""
+                                                var description = ""
+                                                var category = "(none)"
+
+                                                try {
+                                                    val loader = java.net.URLClassLoader(arrayOf(jarFile.toURI().toURL()), this.javaClass.classLoader)
+                                                    val clazz = loader.loadClass(className)
+                                                    val sfrAnnotation = clazz.annotations.find { it.annotationClass.java.simpleName == "SFR" }
+                                                    
+                                                    if (sfrAnnotation != null) {
+                                                        title = try { sfrAnnotation.annotationClass.java.getMethod("title").invoke(sfrAnnotation) as? String } catch(e: Exception) { null } ?: ""
+                                                        description = try { sfrAnnotation.annotationClass.java.getMethod("description").invoke(sfrAnnotation) as? String } catch(e: Exception) { null } ?: ""
+                                                        category = try { sfrAnnotation.annotationClass.java.getMethod("category").invoke(sfrAnnotation) as? String } catch(e: Exception) { null } ?: "(none)"
+                                                    }
+                                                } catch (e: Exception) {
+                                                    // ロード失敗時はログを出してフォールバック
+                                                    println("Failed to read annotations for $className: ${e.message}")
+                                                }
+
+                                                // 文字列が存在しない場合のフォールバック
+                                                if (title.isBlank()) title = shortName
+                                                if (description.isBlank()) description = "No description available."
+                                                if (category.isBlank()) category = "(none)"
+
                                                 _testPlugins.add(
                                                     TestPlugin(
                                                         id = "${parentDirName}_$shortName",
                                                         name = "[$parentDirName] $shortName",
-                                                        className = className, // ★文字列だけ渡す
-                                                        jarFile = jarFile,     // ★JARパスを渡す
-                                                        shortName = shortName
+                                                        className = className,
+                                                        jarFile = jarFile,
+                                                        shortName = shortName,
+                                                        title = title,
+                                                        description = description,
+                                                        category = category
                                                     )
                                                 )
                                                 loadedCount++

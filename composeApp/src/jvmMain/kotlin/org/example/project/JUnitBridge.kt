@@ -18,4 +18,6 @@ object JUnitBridge {
     // パス情報
     var resourceDir: String = ""
     var configFilePath: String = ""
+    var resultsDir: String = ""
+    var baseDir: String = ""
 }

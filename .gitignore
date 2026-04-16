@@ -40,6 +40,7 @@ local.properties
 
 repomix*
 .repomixignore
+.gradle-local/
 
 bin/
 composeApp/plugins

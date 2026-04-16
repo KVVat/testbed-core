@@ -20,6 +20,7 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.*
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -73,10 +74,19 @@ fun App() {
             androidx.compose.material3.DrawerValue.Closed)
         //rememberDrawerState(initialValue = DrawerValue.Closed)
 
+    val snackbarHostState = remember { SnackbarHostState() }
+    
+    LaunchedEffect(Unit) {
+        viewModel.snackbarMessage.collect { message ->
+            snackbarHostState.showSnackbar(message)
+        }
+    }
+
     MaterialTheme(colorScheme = darkColorScheme()) {
-        ModalNavigationDrawer(
-            drawerState = drawerState,
-            drawerContent = {
+        Box(modifier = Modifier.fillMaxSize()) {
+            ModalNavigationDrawer(
+                drawerState = drawerState,
+                drawerContent = {
                 // 2. Drawer の中身（詳細が見れるテスト一覧）
                 ModalDrawerSheet(
                     drawerContainerColor = Color(0xFF2B2D30),
@@ -90,14 +100,18 @@ fun App() {
                         },
                         onCloseRequest = {
                             scope.launch { drawerState.close() }
+                        },
+                        onOpenResultsClick = {
+                            viewModel.openResultsDirectory()
+                        },
+                        onImportPluginClick = { file ->
+                            viewModel.importPluginZip(file)
                         }
-
                     )
                 }
             }
         ) {
             Scaffold(
-
                 topBar = {
                     TopControlBar(
                         adbConnected = uiState.adbIsValid,
@@ -108,31 +122,29 @@ fun App() {
                         onDeviceInfoClick= {showDeviceInfoDialog=true},
                         onRunTest = { viewModel.runTest(it) },
                         onRefreshPlugins = { viewModel.refreshPlugins() },
-                        onBackClick = { viewModel.pressBack() },
-                        onHomeClick = { viewModel.pressHome() },
-                        onSendText = { text -> viewModel.sendText(text) },
-                        onScreenshotClick = { viewModel.captureScreenshot() },
                         onMenuClick = { scope.launch { drawerState.open() } },
-                        onSetupAgentClick = { viewModel.setupMuttonAgent() }
+                        onSetupAgentClick = { viewModel.setupMuttonAgent() },
+                        onLogcatClick = { viewModel.openLogcatWindow() }
                     )
                 },
                 content = { padding ->
                     Row(modifier = Modifier.padding(padding).fillMaxSize()) {
                         LogConsole(logs = logLines, modifier = Modifier.weight(1f))
                         UtilitySideBar(
-                            onLogcatClick = { enable: Boolean ->
-                                if (enable) viewModel.openLogcatWindow() else viewModel.closeLogcatWindow()
-                            },
-                            onFileExplorerClick = { },
-                            onFlashClick = { file: File -> /* viewModel.batchFlashBootImage(file) */ },
-                            onClearDataClick = { viewModel.clearAppData() },
                             onSettingsClick = { showSettingsDialog = true }
                         )
                     }
                 }
             )
         }
-        if (showSettingsDialog) {
+        
+        // Snackbarを最前面に表示
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter)
+        )
+    }
+    if (showSettingsDialog) {
             SettingsDialog(
                 currentSettings = appSettings,
                 onDismiss = { showSettingsDialog = false },
@@ -160,44 +172,204 @@ fun App() {
 fun TestListDrawerContent(
     testPlugins: List<TestPlugin>,
     onRunTest: (TestPlugin) -> Unit,
-    onCloseRequest: () -> Unit // ← これを追加（×ボタンや項目選択時に呼ぶ）
+    onCloseRequest: () -> Unit,
+    onOpenResultsClick: () -> Unit,
+    onImportPluginClick: (java.io.File) -> Unit
 ) {
+    // カテゴリごとにグループ化し、(none)を末尾にするようにソート
+    val groupedPlugins by remember {
+        derivedStateOf {
+            testPlugins.groupBy { it.category }
+                .toList()
+                .sortedWith { a, b ->
+                    val catA = a.first
+                    val catB = b.first
+                    val isAOthers = catA.isBlank() || catA == "(none)"
+                    val isBOthers = catB.isBlank() || catB == "(none)"
+                    
+                    when {
+                        isAOthers && isBOthers -> 0
+                        isAOthers -> 1
+                        isBOthers -> -1
+                        else -> catA.compareTo(catB)
+                    }
+                }
+                .toMap()
+        }
+    }
+
+    // カテゴリの開閉状態を管理するステート
+    val expandedCategories = remember { mutableStateMapOf<String, Boolean>() }
+
+    // テスト項目の開閉状態を管理するステート
+    val expandedItems = remember { mutableStateMapOf<String, Boolean>() }
+
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween, // 端に寄せる
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
-
         ) {
-            Text(
-                text = "Test Selector",
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            // ×ボタン
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Test Explorer",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(Modifier.width(16.dp))
+                
+                // Results フォルダを開く
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.clickable { onOpenResultsClick() }
+                ) {
+                    Icon(Icons.Default.Folder, contentDescription = "Open Results Folder", tint = MaterialTheme.colorScheme.onSurface)
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = "Results",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+                }
+                
+                Spacer(Modifier.width(16.dp))
+                
+                // Plugin ZIP をインポート
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.clickable {
+                        val fileDialog = java.awt.FileDialog(null as java.awt.Frame?, "Select Plugin ZIP", java.awt.FileDialog.LOAD)
+                        fileDialog.setFilenameFilter { _, name -> name.endsWith(".zip", ignoreCase = true) }
+                        fileDialog.isVisible = true
+                        val file = fileDialog.file
+                        val dir = fileDialog.directory
+                        if (file != null) {
+                            onImportPluginClick(java.io.File(dir, file))
+                        }
+                    }
+                ) {
+                    Icon(Icons.Default.Publish, contentDescription = "Import Plugin ZIP", tint = MaterialTheme.colorScheme.onSurface)
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = "Import",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+                }
+            }
             IconButton(onClick = onCloseRequest) {
-                Icon(Icons.Default.Close, contentDescription = "Close Menu",tint = MaterialTheme.colorScheme.onSurface)
+                Icon(Icons.Default.Close, contentDescription = "Close Menu", tint = MaterialTheme.colorScheme.onSurface)
             }
         }
 
         Spacer(Modifier.height(16.dp))
         HorizontalDivider()
         Spacer(Modifier.height(16.dp))
+
         LazyColumn {
-            items(testPlugins) { plugin ->
-                NavigationDrawerItem(
-                    label = {
-                        Column {
-                            Text(plugin.name, fontWeight = FontWeight.Bold)
-                            // 詳細情報の例：IDや説明文を表示
-                            Text("ID: ${plugin.id}", fontSize = 11.sp, color = Color.Gray)
+            groupedPlugins.forEach { (category, plugins) ->
+                // デフォルトは開いた状態
+                val isExpanded = expandedCategories[category] ?: true
+                val categoryName = if (category.isBlank() || category == "(none)") "Others" else category
+
+                // カテゴリヘッダー
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { expandedCategories[category] = !isExpanded }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = if (isExpanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = categoryName,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "(${plugins.size})",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray
+                        )
+                    }
+                }
+
+                // カテゴリ内のアイテム
+                if (isExpanded) {
+                    items(plugins) { plugin ->
+                        val isItemExpanded = expandedItems[plugin.id] ?: false
+                        
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF3C3F41)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp, horizontal = 8.dp)
+                                .clickable { expandedItems[plugin.id] = !isItemExpanded }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // 左側: テキスト情報
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = plugin.title.ifBlank { plugin.shortName },
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White,
+                                        fontSize = 14.sp
+                                    )
+                                    Spacer(Modifier.height(4.dp))
+                                    
+                                    // 開閉状態に応じて文言を切り替え
+                                    val displayDesc = if (isItemExpanded) {
+                                        plugin.description.ifBlank { "No description available." }
+                                    } else {
+                                        if (plugin.description.length > 60) {
+                                            plugin.description.take(60) + "..."
+                                        } else {
+                                            plugin.description.ifBlank { "No description available." }
+                                        }
+                                    }
+                                    
+                                    Text(
+                                        text = displayDesc,
+                                        color = Color.LightGray,
+                                        fontSize = 12.sp,
+                                        lineHeight = 16.sp
+                                    )
+                                    
+                                    if (isItemExpanded) {
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(
+                                            text = "Class: ${plugin.className}",
+                                            color = Color.Gray,
+                                            fontSize = 10.sp
+                                        )
+                                    }
+                                }
+                                
+                                Spacer(Modifier.width(8.dp))
+                                
+                                // 右側: 実行ボタン（やや大きめ）
+                                Button(
+                                    onClick = { onRunTest(plugin) },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF569CD6)),
+                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                                ) {
+                                    Text("Run", color = Color.White)
+                                }
+                            }
                         }
-                    },
-                    selected = false,
-                    onClick = { onRunTest(plugin) },
-                    icon = { Icon(Icons.Default.Science, null) },
-                    modifier = Modifier.padding(vertical = 4.dp)
-                )
+                    }
+                }
             }
         }
     }
@@ -219,12 +391,9 @@ fun TopControlBar(
     onRunTest: (TestPlugin) -> Unit,
     onDeviceInfoClick: () -> Unit,
     onRefreshPlugins: () -> Unit,
-    onBackClick: () -> Unit,
-    onHomeClick: () -> Unit,
-    onSendText: (String) -> Unit,
-    onScreenshotClick: () -> Unit,
     onMenuClick: () -> Unit,
-    onSetupAgentClick: () -> Unit
+    onSetupAgentClick: () -> Unit,
+    onLogcatClick: () -> Unit
 ) {
     TopAppBar(
         colors = TopAppBarDefaults.topAppBarColors(
@@ -313,48 +482,11 @@ fun TopControlBar(
             }
         },
         actions = {
-            // 右側: Back
-            TooltipIconButton(
-                icon = Icons.Default.ArrowBack,
-                tooltip = "Back",
-                tint = Color.White,
-                onClick = onBackClick
-            )
-
-            // 右側: Home
-            TooltipIconButton(
-                icon = Icons.Default.Home,
-                tooltip = "Home",
-                tint = Color.White,
-                onClick = onHomeClick
-            )
-
-            Divider(Modifier.height(24.dp).width(1.dp).padding(horizontal = 8.dp), color = Color.Gray)
-
-            // 右側: Input Text
-            var showInputTextDialog by remember { mutableStateOf(false) }
-            TooltipIconButton(
-                icon = Icons.Default.Keyboard,
-                tooltip = "Input Text",
-                tint = Color.White,
-                onClick = { showInputTextDialog = true }
-            )
-
-            Divider(Modifier.height(24.dp).width(1.dp).padding(horizontal = 8.dp), color = Color.Gray)
-
-            // 右側: Screenshot
-            TooltipIconButton(
-                icon = Icons.Default.CameraAlt,
-                tooltip = "Take Screenshot",
-                tint = Color.White,
-                onClick = onScreenshotClick
-            )
-
-            if (showInputTextDialog) {
-                InputTextDialog(
-                    onDismiss = { showInputTextDialog = false },
-                    onSend = { text -> onSendText(text); showInputTextDialog = false }
-                )
+            // 右側: Open Logcat
+            TextButton(onClick = onLogcatClick) {
+                Icon(Icons.Default.Visibility, contentDescription = "Open Logcat", tint = Color.White)
+                Spacer(Modifier.width(4.dp))
+                Text("Open Logcat", color = Color.White)
             }
         }
     )
@@ -492,29 +624,13 @@ fun LogLineItem(log: LogLine) {
 
 @Composable
 fun UtilitySideBar(
-    onLogcatClick: (Boolean) -> Unit,
-    onFileExplorerClick: () -> Unit,
-    onFlashClick: (File) -> Unit,
-    onClearDataClick: () -> Unit,
     onSettingsClick: () -> Unit
-    ) {
+) {
     Column(modifier = Modifier.fillMaxHeight().width(56.dp).background(Color(0xFF2B2D30)).drawWithContent {
         drawContent()
         drawLine(color = Color(0xFF1E1F22), start = Offset(0f, 0f), end = Offset(0f, size.height), strokeWidth = 1.dp.toPx())
     }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Top) {
-        Spacer(Modifier.height(16.dp))
-        var isLogcatRunning by remember { mutableStateOf(false) }
-        TooltipIconButton(icon = if (isLogcatRunning) Icons.Default.Visibility else Icons.Default.VisibilityOff, tooltip = "Logcat Monitor") {
-            isLogcatRunning = !isLogcatRunning
-            onLogcatClick(isLogcatRunning)
-        }
-        Spacer(Modifier.height(24.dp))
-        TooltipIconButton(Icons.Default.Folder, "File Explorer") { onFileExplorerClick() }
-        Spacer(Modifier.height(24.dp))
-        TooltipIconButton(Icons.Default.FlashOn, "Batch Flash") { onFlashClick(File("boot.img")) }
         Spacer(Modifier.weight(1f))
-        TooltipIconButton(Icons.Default.DeleteSweep, "Clear App Data") { onClearDataClick() }
-        Spacer(Modifier.height(16.dp))
         TooltipIconButton(Icons.Default.Settings, "Settings") { onSettingsClick() }
         Spacer(Modifier.height(16.dp))
     }
@@ -564,119 +680,150 @@ fun SettingsDialog(
     onSave: (AppSettings) -> Unit,
     onReinstallAgent: () -> Unit
 ) {
-    // ダイアログ内のローカルステート（キャンセルされたら破棄するため）
+    // ダイアログ内のローカルステート
     var autoOpen by remember { mutableStateOf(currentSettings.autoOpenLogcat) }
     var bufferSizeText by remember { mutableStateOf(currentSettings.logcatBufferSize.toString()) }
     var pastMinutesText by remember { mutableStateOf(currentSettings.logcatPastMinutes.toString()) }
     var mcpHost by remember { mutableStateOf(currentSettings.mcpServerHost) }
     var useFallback by remember { mutableStateOf(currentSettings.useMcpFallback) }
 
+    var selectedTabIndex by remember { mutableStateOf(0) }
+    val tabs = listOf("Logcat", "MCP")
+
     Dialog(onDismissRequest = onDismiss) {
         Card(
-            shape = RoundedCornerShape(8.dp),
+            shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2D30)),
-            modifier = Modifier.padding(16.dp).width(350.dp)
+            modifier = Modifier.padding(16.dp).width(400.dp)
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("Settings", style = MaterialTheme.typography.titleLarge, color = Color.White)
                 Spacer(Modifier.height(16.dp))
 
-                // Logcat自動起動チェックボックス
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(
-                        checked = autoOpen,
-                        onCheckedChange = { autoOpen = it },
-                        colors = CheckboxDefaults.colors(checkedColor = Color(0xFF569CD6))
-                    )
-                    Text("Open Logcat window on startup", color = Color.White, fontSize = 14.sp)
+                // タブヘッダー
+                TabRow(
+                    selectedTabIndex = selectedTabIndex,
+                    containerColor = Color(0xFF2B2D30),
+                    contentColor = Color.White,
+                    indicator = { tabPositions ->
+                        TabRowDefaults.SecondaryIndicator(
+                            Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
+                            color = Color(0xFF569CD6)
+                        )
+                    }
+                ) {
+                    tabs.forEachIndexed { index, title ->
+                        Tab(
+                            selected = selectedTabIndex == index,
+                            onClick = { selectedTabIndex = index },
+                            text = { Text(title, color = if (selectedTabIndex == index) Color(0xFF569CD6) else Color.Gray) }
+                        )
+                    }
                 }
 
                 Spacer(Modifier.height(16.dp))
 
-                // バッファサイズ入力（数字のみ許容）
-                OutlinedTextField(
-                    value = bufferSizeText,
-                    onValueChange = { if (it.all { char -> char.isDigit() }) bufferSizeText = it },
-                    label = { Text("Logcat Buffer Size (lines)", color = Color.Gray) },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color(0xFF569CD6),
-                        unfocusedBorderColor = Color.Gray,
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White
-                    ),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                // タブコンテンツ
+                when (selectedTabIndex) {
+                    0 -> {
+                        // Logcat 設定
+                        Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = autoOpen,
+                                    onCheckedChange = { autoOpen = it },
+                                    colors = CheckboxDefaults.colors(checkedColor = Color(0xFF569CD6))
+                                )
+                                Text("Open Logcat window on startup", color = Color.White, fontSize = 14.sp)
+                            }
 
-                Spacer(Modifier.height(16.dp))
+                            Spacer(Modifier.height(16.dp))
 
-                // 過去ログ取得範囲（分）入力
-                OutlinedTextField(
-                    value = pastMinutesText,
-                    onValueChange = { if (it.isEmpty() || it.all { char -> char.isDigit() }) pastMinutesText = it },
-                    label = { Text("Logcat Past Fetch (minutes)", color = Color.Gray) },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color(0xFF569CD6),
-                        unfocusedBorderColor = Color.Gray,
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White
-                    ),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                            OutlinedTextField(
+                                value = bufferSizeText,
+                                onValueChange = { if (it.all { char -> char.isDigit() }) bufferSizeText = it },
+                                label = { Text("Logcat Buffer Size (lines)", color = Color.Gray) },
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = Color(0xFF569CD6),
+                                    unfocusedBorderColor = Color.Gray,
+                                    focusedTextColor = Color.White,
+                                    unfocusedTextColor = Color.White
+                                ),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
 
-                Spacer(Modifier.height(16.dp))
+                            Spacer(Modifier.height(16.dp))
 
-                // MCP Server Host (0.0.0.0 vs localhost etc.)
-                Text("MCP Server Host", color = Color.Gray, fontSize = 12.sp)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(
-                        selected = (mcpHost == "::"),
-                        onClick = { mcpHost = "::" },
-                        colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF569CD6))
-                    )
-                    Text(":: (IPv6/v4 All Interfaces)", color = Color.White, fontSize = 14.sp)
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(
-                        selected = (mcpHost == "::1"),
-                        onClick = { mcpHost = "::1" },
-                        colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF569CD6))
-                    )
-                    Text("::1 (IPv6 Localhost)", color = Color.White, fontSize = 14.sp)
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(
-                        selected = (mcpHost == "0.0.0.0"),
-                        onClick = { mcpHost = "0.0.0.0" },
-                        colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF569CD6))
-                    )
-                    Text("0.0.0.0 (IPv4 All Interfaces)", color = Color.White, fontSize = 14.sp)
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(
-                        selected = (mcpHost == "127.0.0.1" || mcpHost == "localhost"),
-                        onClick = { mcpHost = "127.0.0.1" },
-                        colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF569CD6))
-                    )
-                    Text("127.0.0.1 (IPv4 Localhost)", color = Color.White, fontSize = 14.sp)
-                }
+                            OutlinedTextField(
+                                value = pastMinutesText,
+                                onValueChange = { if (it.isEmpty() || it.all { char -> char.isDigit() }) pastMinutesText = it },
+                                label = { Text("Logcat Past Fetch (minutes)", color = Color.Gray) },
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = Color(0xFF569CD6),
+                                    unfocusedBorderColor = Color.Gray,
+                                    focusedTextColor = Color.White,
+                                    unfocusedTextColor = Color.White
+                                ),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                    1 -> {
+                        // MCP 設定
+                        Column {
+                            Text("MCP Server Host", color = Color.Gray, fontSize = 12.sp)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                RadioButton(
+                                    selected = (mcpHost == "::"),
+                                    onClick = { mcpHost = "::" },
+                                    colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF569CD6))
+                                )
+                                Text(":: (IPv6/v4 All Interfaces)", color = Color.White, fontSize = 14.sp)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                RadioButton(
+                                    selected = (mcpHost == "::1"),
+                                    onClick = { mcpHost = "::1" },
+                                    colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF569CD6))
+                                )
+                                Text("::1 (IPv6 Localhost)", color = Color.White, fontSize = 14.sp)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                RadioButton(
+                                    selected = (mcpHost == "0.0.0.0"),
+                                    onClick = { mcpHost = "0.0.0.0" },
+                                    colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF569CD6))
+                                )
+                                Text("0.0.0.0 (IPv4 All Interfaces)", color = Color.White, fontSize = 14.sp)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                RadioButton(
+                                    selected = (mcpHost == "127.0.0.1" || mcpHost == "localhost"),
+                                    onClick = { mcpHost = "127.0.0.1" },
+                                    colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF569CD6))
+                                )
+                                Text("127.0.0.1 (IPv4 Localhost)", color = Color.White, fontSize = 14.sp)
+                            }
 
-                Spacer(Modifier.height(16.dp))
+                            Spacer(Modifier.height(16.dp))
 
-                // MCP Fallbackチェックボックス
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(
-                        checked = useFallback,
-                        onCheckedChange = { useFallback = it },
-                        colors = CheckboxDefaults.colors(checkedColor = Color(0xFF569CD6))
-                    )
-                    Text("Enable MCP Fallback (for single client)", color = Color.White, fontSize = 14.sp)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = useFallback,
+                                    onCheckedChange = { useFallback = it },
+                                    colors = CheckboxDefaults.colors(checkedColor = Color(0xFF569CD6))
+                                )
+                                Text("Enable MCP Fallback (for single client)", color = Color.White, fontSize = 14.sp)
+                            }
+                        }
+                    }
                 }
 
                 Spacer(Modifier.height(24.dp))
 
-                // ボタン類
+                // ボタン類（フッター）
                 Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
                     TextButton(onClick = onReinstallAgent) {
                         Text("Reinstall Agent", color = Color(0xFF569CD6))

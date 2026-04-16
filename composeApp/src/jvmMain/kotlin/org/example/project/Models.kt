@@ -34,7 +34,10 @@ data class TestPlugin(
     val clazz: Class<*>? = null, // 古いプラグイン用の後方互換性
     val className: String = "",  // ★ 追加: クラス名（文字列）
     val jarFile: java.io.File? = null, // ★ 追加: JARファイルのパス
-    val shortName: String
+    val shortName: String,
+    val title: String = "",       // ★ 追加: 人間が読めるタイトル
+    val description: String = "", // ★ 追加: テストの説明
+    val category: String = "(none)" // ★ 追加: カテゴリ
 ) {
     // ★ 追加: 実行時に初めてURLClassLoaderを回してクラスを実体化するメソッド
     fun resolveClass(): Class<*> {
