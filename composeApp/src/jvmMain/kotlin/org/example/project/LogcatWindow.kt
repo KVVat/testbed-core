@@ -89,12 +89,14 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
         }
     }
 
+    val isWindows = System.getProperty("os.name").lowercase().contains("win")
+
     Window(
         onCloseRequest = onCloseRequest, 
         state = windowState, 
         title = "Logcat Pro",
         undecorated = true,
-        transparent = true
+        transparent = !isWindows  // Windowsではtransparent非対応(VM環境でウィンドウが見えなくなる)
     ) {
         MaterialTheme(colorScheme = darkColorScheme()) {
             Surface(
