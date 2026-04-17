@@ -20,7 +20,8 @@ where adb
 set "EXE_PATH=%TOOL_DIR%TestbedCore.exe"
 if exist "%EXE_PATH%" (
     echo [Launcher] Starting TestBed Core...
-    start "" /D "%TOOL_DIR%" "%EXE_PATH%"
+    cd /D "%TOOL_DIR%"
+    "%EXE_PATH%"
 ) else (
     echo [Error] Application not found: %EXE_PATH%
     pause

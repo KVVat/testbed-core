@@ -32,6 +32,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 fun main() {
+    val isWindows = System.getProperty("os.name").lowercase().contains("win")
+    
+    println("[BOOT] Application starting...")
+    println("[BOOT] os.name=${System.getProperty("os.name")}")
+    println("[BOOT] java.home=${System.getProperty("java.home")}")
+    println("[BOOT] isWindows=$isWindows, transparent=${!isWindows}")
+    
     try {
         if (Taskbar.isTaskbarSupported()) {
             val taskbar = Taskbar.getTaskbar()
@@ -58,7 +65,7 @@ fun main() {
         title = "Testbed Core",
         icon = painterResource(Res.drawable.icon),
         undecorated = true,
-        transparent = true
+        transparent = !isWindows  // Windowsではtransparent非対応(VM環境でウィンドウが見えなくなる)
     ) {
         Surface(
             modifier = Modifier

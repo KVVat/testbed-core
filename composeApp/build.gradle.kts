@@ -74,7 +74,7 @@ compose.desktop {
             )
             packageName = "TestbedCore" // アプリの実行ファイル名になります
             packageVersion = "1.0.0"
-            modules("java.management", "java.naming", "jdk.unsupported", "java.sql")
+            modules("java.management", "java.naming", "jdk.unsupported", "java.sql", "jdk.accessibility")
             // OSごとの設定 (アイコンなどがあればここで指定可能)
             macOS {
                 iconFile.set(project.file("src/jvmMain/composeResources/files/icon.icns"))

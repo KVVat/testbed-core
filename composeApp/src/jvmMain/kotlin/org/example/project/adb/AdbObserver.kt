@@ -65,8 +65,9 @@ class AdbObserver(private val viewModel: AppViewModel) {
         val adbName = if (osName.contains("win")) "adb.exe" else "adb"
         val home = System.getProperty("user.home")
 
-        // 1. プロジェクトローカル
-        val localAdb = File("bin/platform-tools/$adbName")
+        // 1. アプリのbaseDir基準でのローカルadb検索
+        val appBaseDir = if (JUnitBridge.baseDir.isNotBlank()) File(JUnitBridge.baseDir) else File(".")
+        val localAdb = File(appBaseDir, "bin/platform-tools/$adbName")
         if (localAdb.exists() && localAdb.canExecute()) return localAdb.absolutePath
 
         // 2. OSごとの標準SDKパス

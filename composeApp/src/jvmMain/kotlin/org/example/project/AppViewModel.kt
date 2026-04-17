@@ -111,7 +111,46 @@ class AppViewModel : ViewModel() {
             }
         }
         
-        // デフォルト（Windows, Linux, 開発時）はカレントディレクトリ
+        // Windows パッケージ版: File(".") が System32 を指す問題の回避
+        if (os.contains("win")) {
+            // 1. compose.application.resources.dir から app root を推定
+            //    パッケージ版では <app_root>/app/resources を指す
+            val resourcesDirProp = System.getProperty("compose.application.resources.dir")
+            if (resourcesDirProp != null) {
+                val resFile = File(resourcesDirProp)
+                val appRoot = resFile.parentFile?.parentFile
+                if (appRoot != null && appRoot.exists()) {
+                    println("[BOOT] Windows: baseDir resolved from resources.dir -> ${appRoot.absolutePath}")
+                    return@run appRoot
+                }
+            }
+            
+            // 2. protectionDomain (jarファイルの場所) から推定
+            try {
+                val codeSource = AppViewModel::class.java.protectionDomain?.codeSource
+                if (codeSource != null) {
+                    val jarDir = File(codeSource.location.toURI()).parentFile
+                    if (jarDir != null && jarDir.exists()) {
+                        val appRoot = jarDir.parentFile ?: jarDir
+                        println("[BOOT] Windows: baseDir resolved from codeSource -> ${appRoot.absolutePath}")
+                        return@run appRoot
+                    }
+                }
+            } catch (e: Exception) {
+                println("[BOOT] Windows: codeSource resolution failed: ${e.message}")
+            }
+            
+            // 3. System32 でないことを確認した上で user.dir をフォールバック
+            val userDir = File(System.getProperty("user.dir"))
+            if (!userDir.absolutePath.lowercase().contains("system32")) {
+                println("[BOOT] Windows: baseDir fallback to user.dir -> ${userDir.absolutePath}")
+                return@run userDir
+            }
+            
+            println("[BOOT] WARNING: All Windows baseDir strategies failed, falling back to File(\".\")")
+        }
+        
+        // デフォルト（Linux, 開発時）はカレントディレクトリ
         File(".").absoluteFile
     }
 
@@ -169,6 +208,12 @@ class AppViewModel : ViewModel() {
     }
 
     init {
+        // デバッグ: 起動環境情報 (Windows等でのパス問題診断用)
+        println("[BOOT] os.name=${System.getProperty("os.name")}")
+        println("[BOOT] user.dir=${System.getProperty("user.dir")}")
+        println("[BOOT] compose.application.resources.dir=${System.getProperty("compose.application.resources.dir")}")
+        println("[BOOT] Resolved baseDir=${baseDir.absolutePath} (exists=${baseDir.exists()})")
+        
         extractDefaultAgentIfNeeded()
         loadSettings()
         startAdbObservation()
