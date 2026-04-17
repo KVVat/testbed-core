@@ -89,6 +89,9 @@ class AppViewModel : ViewModel() {
     val mcpTestLogs = java.util.concurrent.CopyOnWriteArrayList<Map<String, String>>()
     var currentTestStep: String = ""
     var currentTestProgress: Int = 0
+    // baseDir初期化中はlog()が使えないため、メッセージを一時的に溜め込む
+    private val _bootMessages = mutableListOf<Pair<String, LogLevel>>()
+
     private val baseDir: File = run {
         val os = System.getProperty("os.name").lowercase()
         
@@ -120,7 +123,7 @@ class AppViewModel : ViewModel() {
                 val resFile = File(resourcesDirProp)
                 val appRoot = resFile.parentFile?.parentFile
                 if (appRoot != null && appRoot.exists()) {
-                    println("[BOOT] Windows: baseDir resolved from resources.dir -> ${appRoot.absolutePath}")
+                    _bootMessages.add("Windows: baseDir resolved from resources.dir -> ${appRoot.absolutePath}" to LogLevel.INFO)
                     return@run appRoot
                 }
             }
@@ -132,22 +135,22 @@ class AppViewModel : ViewModel() {
                     val jarDir = File(codeSource.location.toURI()).parentFile
                     if (jarDir != null && jarDir.exists()) {
                         val appRoot = jarDir.parentFile ?: jarDir
-                        println("[BOOT] Windows: baseDir resolved from codeSource -> ${appRoot.absolutePath}")
+                        _bootMessages.add("Windows: baseDir resolved from codeSource -> ${appRoot.absolutePath}" to LogLevel.INFO)
                         return@run appRoot
                     }
                 }
             } catch (e: Exception) {
-                println("[BOOT] Windows: codeSource resolution failed: ${e.message}")
+                _bootMessages.add("Windows: codeSource resolution failed: ${e.message}" to LogLevel.WARN)
             }
             
             // 3. System32 でないことを確認した上で user.dir をフォールバック
             val userDir = File(System.getProperty("user.dir"))
             if (!userDir.absolutePath.lowercase().contains("system32")) {
-                println("[BOOT] Windows: baseDir fallback to user.dir -> ${userDir.absolutePath}")
+                _bootMessages.add("Windows: baseDir fallback to user.dir -> ${userDir.absolutePath}" to LogLevel.WARN)
                 return@run userDir
             }
             
-            println("[BOOT] WARNING: All Windows baseDir strategies failed, falling back to File(\".\")")
+            _bootMessages.add("WARNING: All Windows baseDir strategies failed, falling back to File(\".\")" to LogLevel.ERROR)
         }
         
         // デフォルト（Linux, 開発時）はカレントディレクトリ
@@ -209,10 +212,13 @@ class AppViewModel : ViewModel() {
 
     init {
         // デバッグ: 起動環境情報 (Windows等でのパス問題診断用)
-        println("[BOOT] os.name=${System.getProperty("os.name")}")
-        println("[BOOT] user.dir=${System.getProperty("user.dir")}")
-        println("[BOOT] compose.application.resources.dir=${System.getProperty("compose.application.resources.dir")}")
-        println("[BOOT] Resolved baseDir=${baseDir.absolutePath} (exists=${baseDir.exists()})")
+        log("BOOT", "os.name=${System.getProperty("os.name")}", LogLevel.INFO)
+        log("BOOT", "user.dir=${System.getProperty("user.dir")}", LogLevel.INFO)
+        log("BOOT", "compose.application.resources.dir=${System.getProperty("compose.application.resources.dir")}", LogLevel.INFO)
+        log("BOOT", "Resolved baseDir=${baseDir.absolutePath} (exists=${baseDir.exists()})", LogLevel.INFO)
+        // baseDir初期化中に溜め込んだメッセージをここでログに出力
+        _bootMessages.forEach { (msg, level) -> log("BOOT", msg, level) }
+        _bootMessages.clear()
         
         extractDefaultAgentIfNeeded()
         loadSettings()
