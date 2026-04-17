@@ -18,15 +18,15 @@ class LogRecorder(
     // 書き込みフォーマット (読みやすい1行形式に整形)
     // 例: 2024-02-14 12:00:00.123 1234/com.app.example D/Tag: Message...
     private fun formatLogLine(log: LogLine): String {
-        val pidInfo = if (log.packageName != null) "${log.pid}/${log.packageName}" else log.pid
-        // 改行を含むメッセージは、ファイル内では "\n" などのエスケープ文字にするか、インデントするなど工夫できます。
-        // ここではシンプルに改行をスペースに置換して1行に収めるか、そのまま出力して視認性を優先するか選べます。
-        // 今回は「可読性」重視で、メッセージ内の改行はそのまま出力しつつ、ヘッダをしっかり付けます。
-        return "${log.timestamp} $pidInfo ${log.level.name.first()}/${log.tag}: ${log.message}"
+        val pidInfo = if (!log.pid.isNullOrEmpty()) {
+            if (log.packageName != null) "${log.pid}/${log.packageName}" else log.pid
+        } else ""
+        val sep = if (pidInfo.isNotEmpty()) " $pidInfo" else ""
+        return "${log.timestamp}$sep ${log.level.name.first()}/${log.tag}: ${log.message}"
     }
 
     @Synchronized
-    fun write(log: LogLine) {
+    fun write(line: String) {
         // ファイルサイズチェック & ローテーション
         if (file.exists() && file.length() > maxFileSizeMb * 1024 * 1024) {
             rotate()
@@ -37,7 +37,11 @@ class LogRecorder(
             writer = PrintWriter(FileOutputStream(file, true), true)
         }
 
-        writer?.println(formatLogLine(log))
+        writer?.println(line)
+    }
+
+    fun write(log: LogLine) {
+        write(formatLogLine(log))
     }
 
     private fun rotate() {

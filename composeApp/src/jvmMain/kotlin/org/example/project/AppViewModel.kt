@@ -116,6 +116,7 @@ class AppViewModel : ViewModel() {
     }
 
     private val logRecorder = LogRecorder(baseFileName = File(baseDir, "logcat.log").absolutePath)
+    private val mainLogRecorder = LogRecorder(baseFileName = File(baseDir, "main.log").absolutePath)
 
     private val PLUGINS_DIR = File(baseDir, "plugins")
 
@@ -521,60 +522,207 @@ class AppViewModel : ViewModel() {
         return dir.absolutePath
     }
 
-    fun runTest(plugin: TestPlugin) {
-        if (uiState.value.isRunning) return
+    fun runTest(plugin: TestPlugin, methodName: String? = null, isMcp: Boolean = false) {
+        if (uiState.value.isRunning) {
+            if (isMcp) {
+                mcpTestResults.add(org.example.project.mcp.McpTestResult(plugin.className ?: "", methodName ?: "Unknown", "Error", "Another test is already running", null))
+            }
+            return
+        }
+
+        if (isMcp) {
+            mcpTestResults.clear()
+            mcpTestLogs.clear()
+        }
+        currentTestStep = "Starting Test"
+        currentTestProgress = 0
 
         viewModelScope.launch(Dispatchers.IO) {
-            toggleIsRunning(true)
-            log("TEST", ">>> START: ${plugin.name}", LogLevel.INFO)
+            val resultsDir = File(output_path())
+            val lockFile = File(resultsDir, "${plugin.shortName}.lock")
 
-            val timestamp =
-                LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
+            // 重複起動チェック
+            if (lockFile.exists()) {
+                val lastModified = lockFile.lastModified()
+                val now = System.currentTimeMillis()
+                val diffMinutes = (now - lastModified) / (1000 * 60)
+                if (diffMinutes >= 10) {
+                    log("TEST", "Stale lock file found for ${plugin.shortName}, deleting.", LogLevel.WARN)
+                    lockFile.delete()
+                } else {
+                    log("TEST", "Test ${plugin.shortName} is already running (lock file exists). Aborting.", LogLevel.WARN)
+                    if (isMcp) {
+                        mcpTestResults.add(org.example.project.mcp.McpTestResult(plugin.className ?: "", methodName ?: "Unknown", "Error", "Test is already running (lock file exists)", null))
+                    }
+                    return@launch
+                }
+            }
+
+            toggleIsRunning(true)
+            log("TEST", ">>> START: ${plugin.name}${if(methodName != null) "#$methodName" else ""}", LogLevel.INFO)
+
+            val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
+
+            // ロックファイルの作成
+            try {
+                lockFile.writeText(timestamp)
+            } catch (e: Exception) {
+                log("TEST", "Failed to create lock file: ${e.message}", LogLevel.ERROR)
+                if (isMcp) {
+                    mcpTestResults.add(org.example.project.mcp.McpTestResult(plugin.className ?: "", methodName ?: "Unknown", "Error", "Failed to create lock file: ${e.message}", null))
+                }
+                toggleIsRunning(false)
+                return@launch
+            }
+
             val props = Properties().apply {
                 setProperty("SFR.shortname", plugin.shortName)
             }
 
             var fos: FileOutputStream? = null
+            
+            // For MCP output capture
+            val originalOut = System.out
+            val originalErr = System.err
+            val outCapture = java.io.ByteArrayOutputStream()
+            val errCapture = java.io.ByteArrayOutputStream()
+            
+            class TeeStream(val main: java.io.OutputStream, val branch: java.io.OutputStream) : java.io.OutputStream() {
+                override fun write(b: Int) { main.write(b); branch.write(b) }
+                override fun write(b: ByteArray, off: Int, len: Int) { main.write(b, off, len); branch.write(b, off, len) }
+                override fun flush() { main.flush(); branch.flush() }
+            }
+            
+            val outPrintStream = java.io.PrintStream(TeeStream(originalOut, outCapture))
+            val errPrintStream = java.io.PrintStream(TeeStream(originalErr, errCapture))
+
             try {
                 val antRunner = AntXmlRunListener(::logging, props) {
                     viewModelScope.launch {
                         toggleIsRunning(false)
-                        log("TEST", "<<< FINISH: ${plugin.name}", LogLevel.PASS)
+                        log("TEST", "<<< FINISH: ${plugin.name}${if(methodName != null) "#$methodName" else ""}", LogLevel.PASS)
                     }
                 }
 
-                val reportFile =
-                    File(output_path(), "junit-report-${plugin.shortName}-$timestamp.xml")
+                val reportFile = File(resultsDir, "junit-report-${plugin.shortName}-$timestamp.xml")
                 fos = FileOutputStream(reportFile)
                 antRunner.setOutputStream(fos)
 
-                // Set the class loader to the current thread's context (for resolving resources in the JAR)
                 val originalClassLoader = Thread.currentThread().contextClassLoader
                 val targetClass = plugin.resolveClass()
 
                 Thread.currentThread().contextClassLoader = targetClass.classLoader
-                //Thread.currentThread().contextClassLoader = plugin.clazz?.classLoader
-
+                
+                if (isMcp) {
+                    System.setOut(outPrintStream)
+                    System.setErr(errPrintStream)
+                }
+                
                 try {
                     val runner = JUnitTestRunner(arrayOf(targetClass), antRunner)
-
+                    if (methodName != null) {
+                        runner.methodNameToRun = methodName
+                    }
+                    
+                    if (isMcp) {
+                        runner.addListener(object : org.junit.runner.notification.RunListener() {
+                            override fun testFinished(description: org.junit.runner.Description) {
+                                if (mcpTestResults.none { it.method_name == description.methodName }) {
+                                    mcpTestResults.add(org.example.project.mcp.McpTestResult(plugin.className ?: "", description.methodName, "Pass"))
+                                }
+                            }
+                            override fun testFailure(failure: org.junit.runner.notification.Failure) {
+                                val assertionMsg = failure.message
+                                val stacktrace = failure.trace
+                                mcpTestResults.add(org.example.project.mcp.McpTestResult(plugin.className ?: "", failure.description.methodName, "Fail", assertionMsg, stacktrace))
+                            }
+                        })
+                    }
+                    
                     runner.addListener(UnitTestingTextListener(::logging){})
-
                     runner.run()
                 } finally {
+                    if (isMcp) {
+                        outPrintStream.flush()
+                        errPrintStream.flush()
+                        System.setOut(originalOut)
+                        System.setErr(originalErr)
+                    }
                     Thread.currentThread().contextClassLoader = originalClassLoader
+                }
+                
+                if (isMcp) {
+                    antRunner.setSystemOutput(outCapture.toString("UTF-8"))
+                    antRunner.setSystemError(errCapture.toString("UTF-8"))
                 }
 
                 fos.flush()
             } catch (e: Exception) {
                 log("TEST", "ERROR: ${e.message}", LogLevel.ERROR)
+                if (isMcp) {
+                    mcpTestResults.add(org.example.project.mcp.McpTestResult(plugin.className ?: "", methodName ?: "Unknown", "Error", e.message, e.stackTraceToString()))
+                }
                 toggleIsRunning(false)
             } finally {
-                try {
-                    fos?.close()
-                } catch (e: Exception) {
+                try { fos?.close() } catch (e: Exception) {}
+                
+                // XMLパッチのマージ (遅延書き出しを待機)
+                viewModelScope.launch(Dispatchers.IO) {
+                    val patchFile = File(resultsDir, "xml-patches/PATCH-junit-report-${plugin.shortName}-$timestamp.xml")
+                    val reportFile = File(resultsDir, "junit-report-${plugin.shortName}-$timestamp.xml")
+                    
+                    // パッチファイルの存在を待機 (最大2秒)
+                    var retry = 0
+                    while (!patchFile.exists() && retry < 20) {
+                        delay(100)
+                        retry++
+                    }
+                    
+                    if (patchFile.exists() && reportFile.exists()) {
+                        // ファイル書き出しの完了を少し待つ
+                        delay(200)
+                        org.example.project.tools.XmlMerger.merge(reportFile, patchFile)
+                        // パッチ適用後に削除
+                        patchFile.delete()
+                        // HTMLレポートの生成
+                        generateHtmlReport(reportFile)
+                    } else {
+                        log("TEST", "Merge skipped: files not found (Patch: ${patchFile.exists()}, Report: ${reportFile.exists()})", LogLevel.WARN)
+                        // パッチがなくてもレポートがあればHTML生成を試みる
+                        if (reportFile.exists()) {
+                            generateHtmlReport(reportFile)
+                        }
+                    }
+                    
+                    // ロックファイルの削除
+                    if (lockFile.exists()) {
+                        lockFile.delete()
+                    }
                 }
             }
+        }
+    }
+
+    private fun generateHtmlReport(xmlFile: File) {
+        try {
+            val xsltInputStream = javaClass.classLoader.getResourceAsStream("summary.xslt")
+            if (xsltInputStream == null) {
+                log("TEST", "summary.xslt not found in resources", LogLevel.ERROR)
+                return
+            }
+            
+            val factory = javax.xml.transform.TransformerFactory.newInstance()
+            val transformer = factory.newTransformer(javax.xml.transform.stream.StreamSource(xsltInputStream))
+            
+            val htmlFile = File(xmlFile.parentFile, xmlFile.name.replace(".xml", ".html"))
+            
+            transformer.transform(
+                javax.xml.transform.stream.StreamSource(xmlFile),
+                javax.xml.transform.stream.StreamResult(htmlFile)
+            )
+            log("TEST", "HTML report generated: ${htmlFile.absolutePath}", LogLevel.INFO)
+        } catch (e: Exception) {
+            log("TEST", "Failed to generate HTML report: ${e.message}", LogLevel.ERROR)
         }
     }
 
@@ -585,97 +733,7 @@ class AppViewModel : ViewModel() {
             mcpTestResults.add(org.example.project.mcp.McpTestResult(className, methodName ?: "Unknown", "Error", "Test plugin not found: $className", null))
             return
         }
-
-        if (uiState.value.isRunning) {
-            mcpTestResults.add(org.example.project.mcp.McpTestResult(className, methodName ?: "Unknown", "Error", "Another test is already running", null))
-            return
-        }
-
-        mcpTestResults.clear()
-        mcpTestLogs.clear()
-        currentTestStep = "Starting Test"
-        currentTestProgress = 0
-
-        viewModelScope.launch(Dispatchers.IO) {
-            toggleIsRunning(true)
-            log("TEST", ">>> START: ${plugin.name}${if(methodName != null) "#$methodName" else ""}", LogLevel.INFO)
-
-            val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
-            val props = Properties().apply {
-                setProperty("SFR.shortname", plugin.shortName)
-            }
-
-            var fos: FileOutputStream? = null
-            try {
-                val antRunner = AntXmlRunListener(::logging, props) {
-                    viewModelScope.launch {
-                        toggleIsRunning(false)
-                        log("TEST", "<<< FINISH: ${plugin.name}${if(methodName != null) "#$methodName" else ""}", LogLevel.PASS)
-                    }
-                }
-
-                val reportFile = File(output_path(), "junit-report-${plugin.shortName}-$timestamp.xml")
-                fos = FileOutputStream(reportFile)
-                antRunner.setOutputStream(fos)
-
-                val originalClassLoader = Thread.currentThread().contextClassLoader
-                val targetClass = plugin.resolveClass()
-
-                Thread.currentThread().contextClassLoader = targetClass.classLoader
-                
-                val originalOut = System.out
-                val originalErr = System.err
-                val outCapture = java.io.ByteArrayOutputStream()
-                val errCapture = java.io.ByteArrayOutputStream()
-                
-                class TeeStream(val main: java.io.OutputStream, val branch: java.io.OutputStream) : java.io.OutputStream() {
-                    override fun write(b: Int) { main.write(b); branch.write(b) }
-                    override fun write(b: ByteArray, off: Int, len: Int) { main.write(b, off, len); branch.write(b, off, len) }
-                    override fun flush() { main.flush(); branch.flush() }
-                }
-                
-                val outPrintStream = java.io.PrintStream(TeeStream(originalOut, outCapture))
-                val errPrintStream = java.io.PrintStream(TeeStream(originalErr, errCapture))
-                System.setOut(outPrintStream)
-                System.setErr(errPrintStream)
-                
-                try {
-                    val runner = JUnitTestRunner(arrayOf(targetClass), antRunner)
-                    runner.methodNameToRun = methodName
-                    runner.addListener(object : org.junit.runner.notification.RunListener() {
-                        override fun testFinished(description: org.junit.runner.Description) {
-                            if (mcpTestResults.none { it.method_name == description.methodName }) {
-                                mcpTestResults.add(org.example.project.mcp.McpTestResult(className, description.methodName, "Pass"))
-                            }
-                        }
-                        override fun testFailure(failure: org.junit.runner.notification.Failure) {
-                            val assertionMsg = failure.message
-                            val stacktrace = failure.trace
-                            mcpTestResults.add(org.example.project.mcp.McpTestResult(className, failure.description.methodName, "Fail", assertionMsg, stacktrace))
-                        }
-                    })
-                    runner.addListener(UnitTestingTextListener(::logging){})
-                    runner.run()
-                } finally {
-                    outPrintStream.flush()
-                    errPrintStream.flush()
-                    System.setOut(originalOut)
-                    System.setErr(originalErr)
-                    Thread.currentThread().contextClassLoader = originalClassLoader
-                }
-                
-                antRunner.setSystemOutput(outCapture.toString("UTF-8"))
-                antRunner.setSystemError(errCapture.toString("UTF-8"))
-
-                fos.flush()
-            } catch (e: Exception) {
-                log("TEST", "ERROR: ${e.message}", LogLevel.ERROR)
-                mcpTestResults.add(org.example.project.mcp.McpTestResult(className, methodName ?: "Unknown", "Error", e.message, e.stackTraceToString()))
-                toggleIsRunning(false)
-            } finally {
-                try { fos?.close() } catch (e: Exception) {}
-            }
-        }
+        runTest(plugin, methodName, isMcp = true)
     }
 
     // --- Existing ADB/UI logic (keep as is) ---
@@ -750,7 +808,11 @@ class AppViewModel : ViewModel() {
 
     fun log(tag: String, message: String, level: LogLevel = LogLevel.INFO) {
         val timestamp = LocalTime.now().toString().take(8)
-        viewModelScope.launch { _logFlow.emit(LogLine(timestamp, tag, message, level)) }
+        val logLine = LogLine(timestamp, tag, message, level)
+        viewModelScope.launch { _logFlow.emit(logLine) }
+        viewModelScope.launch(Dispatchers.IO) {
+            mainLogRecorder.write(logLine)
+        }
         if (_uiState.value.isRunning) {
             mcpTestLogs.add(mapOf("time" to timestamp, "level" to level.name, "message" to "[$tag] $message"))
         }
@@ -837,6 +899,7 @@ class AppViewModel : ViewModel() {
     override fun onCleared() {
         super.onCleared()
         logRecorder.close()
+        mainLogRecorder.close()
         mcpServer.stop()
     }
 
