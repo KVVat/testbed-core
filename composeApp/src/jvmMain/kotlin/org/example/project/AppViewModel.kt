@@ -756,14 +756,36 @@ class AppViewModel : ViewModel() {
 
     private fun generateHtmlReport(xmlFile: File) {
         try {
-            val xsltInputStream = javaClass.classLoader.getResourceAsStream("summary.xslt")
-            if (xsltInputStream == null) {
-                log("TEST", "summary.xslt not found in resources", LogLevel.ERROR)
-                return
+            val resourcesDir = File(baseDir, "resources")
+            val xsltFile = File(resourcesDir, "summary.xslt")
+
+            if (!xsltFile.exists()) {
+                log("TEST", "summary.xslt not found in resources directory. Extracting from JAR...", LogLevel.INFO)
+                resourcesDir.mkdirs()
+                
+                val xsltInputStream = AppViewModel::class.java.getResourceAsStream("/summary.xslt") 
+                    ?: AppViewModel::class.java.classLoader.getResourceAsStream("summary.xslt")
+                
+                if (xsltInputStream == null) {
+                    log("TEST", "summary.xslt not found in JAR resources", LogLevel.ERROR)
+                    return
+                }
+                
+                try {
+                    xsltInputStream.use { input ->
+                        xsltFile.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    log("TEST", "summary.xslt extracted to ${xsltFile.absolutePath}", LogLevel.INFO)
+                } catch (e: Exception) {
+                    log("TEST", "Failed to extract summary.xslt: ${e.message}", LogLevel.ERROR)
+                    return
+                }
             }
             
             val factory = javax.xml.transform.TransformerFactory.newInstance()
-            val transformer = factory.newTransformer(javax.xml.transform.stream.StreamSource(xsltInputStream))
+            val transformer = factory.newTransformer(javax.xml.transform.stream.StreamSource(xsltFile))
             
             val htmlFile = File(xmlFile.parentFile, xmlFile.name.replace(".xml", ".html"))
             
