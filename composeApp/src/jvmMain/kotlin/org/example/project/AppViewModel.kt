@@ -233,9 +233,13 @@ class AppViewModel : ViewModel() {
                 TestLogLevel.ERROR -> LogLevel.ERROR
             }
             // Also print to System.out so it can be captured by AntXmlListener
-            System.out.println("[$level] $message")
+            // System.out.println("[$level] $message")
+
             // The tag is fixed to PLUGIN, or obtained dynamically
-            log("PLUGIN", message, internalLevel)
+log("PLUGIN", message, internalLevel)
+
+
+
         }
         JUnitBridge.onProgress = { step, percent ->
             currentTestStep = step
