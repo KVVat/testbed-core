@@ -12,9 +12,7 @@ java {
     targetCompatibility = JavaVersion.VERSION_21
 }
 
-kotlin {
-    jvmToolchain(21)
-}
+
 
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
@@ -24,7 +22,12 @@ plugins {
 }
 
 kotlin {
-    jvm()
+    jvmToolchain(21)
+    jvm {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+        }
+    }
 
     sourceSets {
         commonMain.dependencies {

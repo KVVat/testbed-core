@@ -31,6 +31,7 @@ import org.example.project.tools.ProcessNameResolver
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 import org.example.project.adb.AdbRepository
+import org.example.project.junit.JUnitTestExecutor
 import org.example.project.model.UiNode
 import org.example.project.model.DumpResult
 import com.google.gson.Gson
@@ -52,6 +53,7 @@ data class AppSettings(
 
 class MainViewModel : ViewModel(), KoinComponent {
     private val adbRepository: AdbRepository by inject()
+    private val testExecutor: JUnitTestExecutor by inject()
     
     private val _uiState = MutableStateFlow(AppUiState())
     val uiState = _uiState.asStateFlow()
@@ -215,33 +217,30 @@ class MainViewModel : ViewModel(), KoinComponent {
                 log(event.tag, event.message, event.level)
             }
         }
+        viewModelScope.launch {
+            testExecutor.logs.collect { event ->
+                log(event.tag, event.message, event.level)
+            }
+        }
+        viewModelScope.launch {
+            testExecutor.isRunning.collect { isRunning ->
+                toggleIsRunning(isRunning)
+            }
+        }
+        viewModelScope.launch {
+            testExecutor.currentTestStep.collect { step ->
+                currentTestStep = step
+            }
+        }
+        viewModelScope.launch {
+            testExecutor.currentTestProgress.collect { progress ->
+                currentTestProgress = progress
+            }
+        }
 
 
         mcpServer.start(host = _appSettings.value.mcpServerHost)
-        JUnitBridge.logging = { message, level ->
-            val internalLevel = when (level) {
-                TestLogLevel.DEBUG -> LogLevel.DEBUG
-                TestLogLevel.INFO -> LogLevel.INFO
-                TestLogLevel.PASS -> LogLevel.PASS
-                TestLogLevel.WARN -> LogLevel.WARN
-                TestLogLevel.ERROR -> LogLevel.ERROR
-            }
-            // Also print to System.out so it can be captured by AntXmlListener
-            // System.out.println("[$level] $message")
 
-            // The tag is fixed to PLUGIN, or obtained dynamically
-        log("PLUGIN", message, internalLevel)
-
-        }
-        JUnitBridge.onProgress = { step, percent ->
-            currentTestStep = step
-            currentTestProgress = percent
-        }
-
-        JUnitBridge.resourceDir = File(baseDir, "resources").absolutePath
-        JUnitBridge.configFilePath = File(baseDir, "config/settings.json").absolutePath
-        JUnitBridge.resultsDir = File(baseDir, "results").absolutePath
-        JUnitBridge.baseDir = baseDir.absolutePath
 
         // Load JARs from the plugin directory on startup
         loadPluginsFromDir()
@@ -559,252 +558,15 @@ class MainViewModel : ViewModel(), KoinComponent {
         _uiState.update { it.copy(isRunning = isRunning) }
     }
 
-    fun logging(message: String) {
-        val level = when {
-            message.contains("failed") || message.contains("Exception") -> LogLevel.ERROR
-            message.contains("[SKIPPED REASON]") || message.contains("skipped") -> LogLevel.WARN
-            message.contains("passed") -> LogLevel.PASS
-            else -> LogLevel.DEBUG
-        }
-        log("TEST", message, level)
-    }
-
-    private fun output_path(): String {
-        val dir = File(baseDir, "results").apply { mkdirs() }
-        return dir.absolutePath
-    }
-
     fun runTest(plugin: TestPlugin, methodName: String? = null, isMcp: Boolean = false) {
-        if (uiState.value.isRunning) {
-            if (isMcp) {
-                mcpTestResults.add(org.example.project.mcp.McpTestResult(plugin.className ?: "", methodName ?: "Unknown", "Error", "Another test is already running", null))
-            }
-            return
-        }
-
-        if (isMcp) {
-            mcpTestResults.clear()
-            mcpTestLogs.clear()
-        }
-        currentTestStep = "Starting Test"
-        currentTestProgress = 0
-
-        viewModelScope.launch(Dispatchers.IO) {
-            val resultsDir = File(output_path())
-            val lockFile = File(resultsDir, "${plugin.shortName}.lock")
-
-            // 重複起動チェック
-            if (lockFile.exists()) {
-                val lastModified = lockFile.lastModified()
-                val now = System.currentTimeMillis()
-                val diffMinutes = (now - lastModified) / (1000 * 60)
-                if (diffMinutes >= 10) {
-                    log("TEST", "Stale lock file found for ${plugin.shortName}, deleting.", LogLevel.WARN)
-                    lockFile.delete()
-                } else {
-                    log("TEST", "Test ${plugin.shortName} is already running (lock file exists). Aborting.", LogLevel.WARN)
-                    if (isMcp) {
-                        mcpTestResults.add(org.example.project.mcp.McpTestResult(plugin.className ?: "", methodName ?: "Unknown", "Error", "Test is already running (lock file exists)", null))
-                    }
-                    return@launch
-                }
-            }
-
-            toggleIsRunning(true)
-            log("TEST", "START: ${plugin.name}${if(methodName != null) "#$methodName" else ""}", LogLevel.INFO)
-
-            val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
-
-            // ロックファイルの作成
-            try {
-                lockFile.writeText(timestamp)
-            } catch (e: Exception) {
-                log("TEST", "Failed to create lock file: ${e.message}", LogLevel.ERROR)
-                if (isMcp) {
-                    mcpTestResults.add(org.example.project.mcp.McpTestResult(plugin.className ?: "", methodName ?: "Unknown", "Error", "Failed to create lock file: ${e.message}", null))
-                }
-                toggleIsRunning(false)
-                return@launch
-            }
-
-            val props = Properties().apply {
-                setProperty("SFR.shortname", plugin.shortName)
-            }
-
-            var fos: FileOutputStream? = null
-            
-            // For MCP output capture
-            val originalOut = System.out
-            val originalErr = System.err
-            val outCapture = java.io.ByteArrayOutputStream()
-            val errCapture = java.io.ByteArrayOutputStream()
-            
-            class TeeStream(val main: java.io.OutputStream, val branch: java.io.OutputStream) : java.io.OutputStream() {
-                override fun write(b: Int) { main.write(b); branch.write(b) }
-                override fun write(b: ByteArray, off: Int, len: Int) { main.write(b, off, len); branch.write(b, off, len) }
-                override fun flush() { main.flush(); branch.flush() }
-            }
-            
-            val outPrintStream = java.io.PrintStream(TeeStream(originalOut, outCapture))
-            val errPrintStream = java.io.PrintStream(TeeStream(originalErr, errCapture))
-
-            try {
-                val antRunner = AntXmlRunListener(::logging, props) {
-                    viewModelScope.launch {
-                        toggleIsRunning(false)
-                        log("TEST", "FINISH: ${plugin.name}${if(methodName != null) "#$methodName" else ""}", LogLevel.PASS)
-                    }
-                }
-
-                val reportFile = File(resultsDir, "junit-report-${plugin.shortName}-$timestamp.xml")
-                fos = FileOutputStream(reportFile)
-                antRunner.setOutputStream(fos)
-
-                val originalClassLoader = Thread.currentThread().contextClassLoader
-                val targetClass = plugin.resolveClass()
-
-                Thread.currentThread().contextClassLoader = targetClass.classLoader
-                
-                if (isMcp) {
-                    System.setOut(outPrintStream)
-                    System.setErr(errPrintStream)
-                }
-                
-                try {
-                    val runner = JUnitTestRunner(arrayOf(targetClass), antRunner)
-                    if (methodName != null) {
-                        runner.methodNameToRun = methodName
-                    }
-                    
-                    if (isMcp) {
-                        runner.addListener(object : org.junit.runner.notification.RunListener() {
-                            override fun testFinished(description: org.junit.runner.Description) {
-                                if (mcpTestResults.none { it.method_name == description.methodName }) {
-                                    mcpTestResults.add(org.example.project.mcp.McpTestResult(plugin.className ?: "", description.methodName, "Pass"))
-                                }
-                            }
-                            override fun testFailure(failure: org.junit.runner.notification.Failure) {
-                                val assertionMsg = failure.message
-                                val stacktrace = failure.trace
-                                mcpTestResults.add(org.example.project.mcp.McpTestResult(plugin.className ?: "", failure.description.methodName, "Fail", assertionMsg, stacktrace))
-                            }
-                        })
-                    }
-                    
-                    runner.addListener(UnitTestingTextListener(::logging){})
-                    runner.run()
-                } finally {
-                    if (isMcp) {
-                        outPrintStream.flush()
-                        errPrintStream.flush()
-                        System.setOut(originalOut)
-                        System.setErr(originalErr)
-                    }
-                    Thread.currentThread().contextClassLoader = originalClassLoader
-                }
-                
-                if (isMcp) {
-                    antRunner.setSystemOutput(outCapture.toString("UTF-8"))
-                    antRunner.setSystemError(errCapture.toString("UTF-8"))
-                }
-
-                fos.flush()
-            } catch (e: Exception) {
-                log("TEST", "ERROR: ${e.message}", LogLevel.ERROR)
-                if (isMcp) {
-                    mcpTestResults.add(org.example.project.mcp.McpTestResult(plugin.className ?: "", methodName ?: "Unknown", "Error", e.message, e.stackTraceToString()))
-                }
-                toggleIsRunning(false)
-            } finally {
-                try { fos?.close() } catch (e: Exception) {}
-                
-                // XMLパッチのマージ (遅延書き出しを待機)
-                viewModelScope.launch(Dispatchers.IO) {
-                    val patchFile = File(resultsDir, "xml-patches/PATCH-junit-report-${plugin.shortName}-$timestamp.xml")
-                    val reportFile = File(resultsDir, "junit-report-${plugin.shortName}-$timestamp.xml")
-                    
-                    // パッチファイルの存在を待機 (最大2秒)
-                    var retry = 0
-                    while (!patchFile.exists() && retry < 20) {
-                        delay(100)
-                        retry++
-                    }
-                    
-                    if (patchFile.exists() && reportFile.exists()) {
-                        // ファイル書き出しの完了を少し待つ
-                        delay(200)
-                        org.example.project.tools.XmlMerger.merge(reportFile, patchFile)
-                        // パッチ適用後に削除
-                        patchFile.delete()
-                        // HTMLレポートの生成
-                        generateHtmlReport(reportFile)
-                    } else {
-                        log("TEST", "Merge skipped: files not found (Patch: ${patchFile.exists()}, Report: ${reportFile.exists()})", LogLevel.WARN)
-                        // パッチがなくてもレポートがあればHTML生成を試みる
-                        if (reportFile.exists()) {
-                            generateHtmlReport(reportFile)
-                        }
-                    }
-                    
-                    // ロックファイルの削除
-                    if (lockFile.exists()) {
-                        lockFile.delete()
-                    }
-                }
-            }
-        }
-    }
-
-    private fun generateHtmlReport(xmlFile: File) {
-        try {
-            val resourcesDir = File(baseDir, "resources")
-            val xsltFile = File(resourcesDir, "summary.xslt")
-
-            if (!xsltFile.exists()) {
-                log("TEST", "summary.xslt not found in resources directory. Extracting from JAR...", LogLevel.INFO)
-                resourcesDir.mkdirs()
-                
-                val xsltInputStream = MainViewModel::class.java.getResourceAsStream("/summary.xslt") 
-                    ?: MainViewModel::class.java.classLoader.getResourceAsStream("summary.xslt")
-                
-                if (xsltInputStream == null) {
-                    log("TEST", "summary.xslt not found in JAR resources", LogLevel.ERROR)
-                    return
-                }
-                
-                try {
-                    xsltInputStream.use { input ->
-                        xsltFile.outputStream().use { output ->
-                            input.copyTo(output)
-                        }
-                    }
-                    log("TEST", "summary.xslt extracted to ${xsltFile.absolutePath}", LogLevel.INFO)
-                } catch (e: Exception) {
-                    log("TEST", "Failed to extract summary.xslt: ${e.message}", LogLevel.ERROR)
-                    return
-                }
-            }
-            
-            val factory = javax.xml.transform.TransformerFactory.newInstance()
-            val transformer = factory.newTransformer(javax.xml.transform.stream.StreamSource(xsltFile))
-            
-            val htmlFile = File(xmlFile.parentFile, xmlFile.name.replace(".xml", ".html"))
-            
-            transformer.transform(
-                javax.xml.transform.stream.StreamSource(xmlFile),
-                javax.xml.transform.stream.StreamResult(htmlFile)
-            )
-            log("TEST", "HTML report generated: ${htmlFile.absolutePath}", LogLevel.INFO)
-        } catch (e: Exception) {
-            log("TEST", "Failed to generate HTML report: ${e.message}", LogLevel.ERROR)
-        }
+        testExecutor.runTest(plugin, methodName, isMcp)
     }
 
     fun runTestForMcp(className: String, methodName: String?) {
         val plugin = testPlugins.find { it.className == className }
         if (plugin == null) {
             log("SYSTEM", "Test plugin not found: $className", LogLevel.ERROR)
-            mcpTestResults.add(org.example.project.mcp.McpTestResult(className, methodName ?: "Unknown", "Error", "Test plugin not found: $className", null))
+            testExecutor.mcpTestResults.add(org.example.project.mcp.McpTestResult(className, methodName ?: "Unknown", "Error", "Test plugin not found: $className", null))
             return
         }
         runTest(plugin, methodName, isMcp = true)

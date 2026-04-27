@@ -219,35 +219,4 @@ class AdbDeviceRule(val deviceType: DeviceType = DeviceType.ANY, vararg val requ
             }
         }
     }
-    /*
-    suspend fun waitBoot(){
-        runBlocking {
-
-            loop@ for (device in adb.execute(ListDevicesRequest())) {
-                try {
-                    val booted =
-                        adb.execute(GetSinglePropRequest("sys.boot_completed"), device.serial)
-                            .isNotBlank()
-                    if (!booted) continue
-
-                    supportedFeatures = adb.execute(FetchDeviceFeaturesRequest(device.serial))
-                    if (requiredFeatures.isNotEmpty()) {
-                        Assume.assumeTrue(
-                            "No compatible device found for features $requiredFeatures",
-                            supportedFeatures.containsAll(requiredFeatures.asList())
-                        )
-                    } else {
-                        continue
-                    }
-
-                } catch (e: ConnectException) {
-                    //logging("connecting ... ")
-                    continue
-                } catch (e: RequestRejectedException) {
-                    //logging("rejecting ... ")
-                    continue
-                }
-            }
-        }
-    }*/
 }

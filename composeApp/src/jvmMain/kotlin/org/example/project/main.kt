@@ -6,6 +6,7 @@ import org.koin.core.context.startKoin
 import org.koin.dsl.module
 import org.example.project.adb.AdbRepository
 import org.example.project.ToolViewModel
+import org.example.project.junit.JUnitTestExecutor
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import androidx.compose.ui.window.WindowPlacement
@@ -44,6 +45,7 @@ fun main() {
         modules(module {
             single { AdbRepository() }
             single { ToolViewModel() }
+            single { JUnitTestExecutor(File(JUnitBridge.baseDir.ifBlank { "." })) }
         })
     }
     println("[BOOT] os.name=${System.getProperty("os.name")}")
