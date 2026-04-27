@@ -28,6 +28,9 @@ import org.example.project.junit.JUnitTestRunner
 import org.example.project.tools.LogRecorder
 import org.example.project.tools.LogcatParser
 import org.example.project.tools.ProcessNameResolver
+import org.koin.core.component.KoinComponent
+import org.koin.core.component.inject
+import org.example.project.adb.AdbRepository
 import org.example.project.model.UiNode
 import org.example.project.model.DumpResult
 import com.google.gson.Gson
@@ -40,50 +43,29 @@ import java.util.Base64
 
 
 data class AppSettings(
-    val autoOpenLogcat: Boolean = true,
+    val autoOpenLogcat: Boolean = false,
     val logcatBufferSize: Int = 2000,
     val logcatPastMinutes: Int = 10,
     val mcpServerHost: String = "0.0.0.0",
     val useMcpFallback: Boolean = true
 )
 
-class AppViewModel : ViewModel() {
+class MainViewModel : ViewModel(), KoinComponent {
+    private val adbRepository: AdbRepository by inject()
+    
     private val _uiState = MutableStateFlow(AppUiState())
     val uiState = _uiState.asStateFlow()
 
     private val _logFlow = MutableSharedFlow<LogLine>(replay = 100)
     val logFlow = _logFlow.asSharedFlow()
 
-    private val _isLogcatWindowOpen = MutableStateFlow(false)
-    val isLogcatWindowOpen = _isLogcatWindowOpen.asStateFlow()
 
-    private val _logcatLines = mutableStateListOf<LogLine>()
-    val logcatLines: List<LogLine> get() = _logcatLines
-
-    private val _logcatFilter = MutableStateFlow("")
-    val logcatFilter = _logcatFilter.asStateFlow()
-
-    private val _uiDumpRoot = MutableStateFlow<UiNode?>(null)
-    val uiDumpRoot = _uiDumpRoot.asStateFlow()
-
-    private val _uiDumpScreenshot = MutableStateFlow<ImageBitmap?>(null)
-    val uiDumpScreenshot = _uiDumpScreenshot.asStateFlow()
-
-    private val _uiDumpScreenWidth = MutableStateFlow(1080)
-    val uiDumpScreenWidth = _uiDumpScreenWidth.asStateFlow()
-
-    private val _uiDumpScreenHeight = MutableStateFlow(2400)
-    val uiDumpScreenHeight = _uiDumpScreenHeight.asStateFlow()
-
-    private val _selectedToolWindowTab = MutableStateFlow(0) // 0: Logcat, 1: UI Inspector
-    val selectedToolWindowTab = _selectedToolWindowTab.asStateFlow()
 
     private val _testPlugins = mutableStateListOf<TestPlugin>()
     val testPlugins: List<TestPlugin> get() = _testPlugins
 
-    private val adbObserver = AdbObserver(this)
     private val fastbootClient = FastbootClient()
-    private val mcpServer = org.example.project.mcp.McpSseServer(adbObserver, this)
+    private val mcpServer = org.example.project.mcp.McpSseServer(adbRepository.adbObserver, this)
 
     val mcpTestResults = java.util.concurrent.CopyOnWriteArrayList<org.example.project.mcp.McpTestResult>()
     val mcpTestLogs = java.util.concurrent.CopyOnWriteArrayList<Map<String, String>>()
@@ -97,7 +79,7 @@ class AppViewModel : ViewModel() {
         
         // Mac環境で、かつ .app バンドル内から実行されている場合
         if (os.contains("mac")) {
-            val codeSource = AppViewModel::class.java.protectionDomain.codeSource
+            val codeSource = MainViewModel::class.java.protectionDomain.codeSource
             val location = codeSource?.location
             if (location != null) {
                 val path = File(location.toURI()).absolutePath
@@ -130,7 +112,7 @@ class AppViewModel : ViewModel() {
             
             // 2. protectionDomain (jarファイルの場所) から推定
             try {
-                val codeSource = AppViewModel::class.java.protectionDomain?.codeSource
+                val codeSource = MainViewModel::class.java.protectionDomain?.codeSource
                 if (codeSource != null) {
                     val jarDir = File(codeSource.location.toURI()).parentFile
                     if (jarDir != null && jarDir.exists()) {
@@ -157,7 +139,6 @@ class AppViewModel : ViewModel() {
         File(".").absoluteFile
     }
 
-    private val logRecorder = LogRecorder(baseFileName = File(baseDir, "logcat.log").absolutePath)
     private val mainLogRecorder = LogRecorder(baseFileName = File(baseDir, "main.log").absolutePath)
 
     private val PLUGINS_DIR = File(baseDir, "plugins")
@@ -182,7 +163,7 @@ class AppViewModel : ViewModel() {
         }
         val agentFile = File(resourcesDir, "mutton-agent.apk")
         
-        val resourceUrl = AppViewModel::class.java.classLoader.getResource("mutton-agent.apk")
+        val resourceUrl = MainViewModel::class.java.classLoader.getResource("mutton-agent.apk")
         if (resourceUrl != null) {
             val resourceConnection = resourceUrl.openConnection()
             val resourceLastModified = resourceConnection.lastModified
@@ -222,7 +203,20 @@ class AppViewModel : ViewModel() {
         
         extractDefaultAgentIfNeeded()
         loadSettings()
-        startAdbObservation()
+        
+        // Collect flows from AdbRepository
+        viewModelScope.launch {
+            adbRepository.adbState.collect { state ->
+                updateAdbState(state.isValid, state.isUnauthorized, state.deviceSerial, state.deviceInfo)
+            }
+        }
+        viewModelScope.launch {
+            adbRepository.logs.collect { event ->
+                log(event.tag, event.message, event.level)
+            }
+        }
+
+
         mcpServer.start(host = _appSettings.value.mcpServerHost)
         JUnitBridge.logging = { message, level ->
             val internalLevel = when (level) {
@@ -236,9 +230,7 @@ class AppViewModel : ViewModel() {
             // System.out.println("[$level] $message")
 
             // The tag is fixed to PLUGIN, or obtained dynamically
-log("PLUGIN", message, internalLevel)
-
-
+        log("PLUGIN", message, internalLevel)
 
         }
         JUnitBridge.onProgress = { step, percent ->
@@ -260,7 +252,7 @@ log("PLUGIN", message, internalLevel)
             try {
                 val props = Properties().apply { load(SETTINGS_FILE.inputStream()) }
                 _appSettings.value = AppSettings(
-                    autoOpenLogcat = props.getProperty("autoOpenLogcat", "true").toBoolean(),
+                    autoOpenLogcat = props.getProperty("autoOpenLogcat", "false").toBoolean(),
                     logcatBufferSize = props.getProperty("logcatBufferSize", "30000").toIntOrNull() ?: 30000,
                     logcatPastMinutes = props.getProperty("logcatPastMinutes", "10").toIntOrNull() ?: 10,
                     mcpServerHost = props.getProperty("mcpServerHost", "0.0.0.0"),
@@ -432,6 +424,7 @@ log("PLUGIN", message, internalLevel)
                                                 var title = ""
                                                 var description = ""
                                                 var category = "(none)"
+                                                var methods = emptyList<String>()
 
                                                 try {
                                                     val loader = java.net.URLClassLoader(arrayOf(jarFile.toURI().toURL()), this.javaClass.classLoader)
@@ -443,6 +436,8 @@ log("PLUGIN", message, internalLevel)
                                                         description = try { sfrAnnotation.annotationClass.java.getMethod("description").invoke(sfrAnnotation) as? String } catch(e: Exception) { null } ?: ""
                                                         category = try { sfrAnnotation.annotationClass.java.getMethod("category").invoke(sfrAnnotation) as? String } catch(e: Exception) { null } ?: "(none)"
                                                     }
+                                                    
+                                                    methods = clazz.methods.filter { it.isAnnotationPresent(org.junit.Test::class.java) }.map { it.name }
                                                 } catch (e: Exception) {
                                                     // ロード失敗時はログを出してフォールバック
                                                     println("Failed to read annotations for $className: ${e.message}")
@@ -462,7 +457,8 @@ log("PLUGIN", message, internalLevel)
                                                         shortName = shortName,
                                                         title = title,
                                                         description = description,
-                                                        category = category
+                                                        category = category,
+                                                        methods = methods
                                                     )
                                                 )
                                                 loadedCount++
@@ -494,11 +490,11 @@ log("PLUGIN", message, internalLevel)
                                         val clazz = loader.loadClass(className)
 
                                         // Check for methods annotated with @Test
-                                        val hasTestAnnotation = clazz.methods.any {
+                                        val methods = clazz.methods.filter {
                                             it.isAnnotationPresent(org.junit.Test::class.java)
-                                        }
+                                        }.map { it.name }
 
-                                        if (hasTestAnnotation) {
+                                        if (methods.isNotEmpty()) {
                                             withContext(Dispatchers.Main) {
                                                 // Prevent duplicate registration
                                                 if (_testPlugins.none { it.clazz == clazz }) {
@@ -509,7 +505,8 @@ log("PLUGIN", message, internalLevel)
                                                             id = "${parentDirName}_${clazz.simpleName}",
                                                             name = "${clazz.simpleName}",
                                                             clazz = clazz,
-                                                            shortName = clazz.simpleName
+                                                            shortName = clazz.simpleName,
+                                                            methods = methods
                                                         )
                                                     )
                                                     loadedCount++
@@ -569,7 +566,7 @@ log("PLUGIN", message, internalLevel)
             message.contains("passed") -> LogLevel.PASS
             else -> LogLevel.DEBUG
         }
-        log("JUnit", message, level)
+        log("TEST", message, level)
     }
 
     private fun output_path(): String {
@@ -614,7 +611,7 @@ log("PLUGIN", message, internalLevel)
             }
 
             toggleIsRunning(true)
-            log("TEST", ">>> START: ${plugin.name}${if(methodName != null) "#$methodName" else ""}", LogLevel.INFO)
+            log("TEST", "START: ${plugin.name}${if(methodName != null) "#$methodName" else ""}", LogLevel.INFO)
 
             val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
 
@@ -655,7 +652,7 @@ log("PLUGIN", message, internalLevel)
                 val antRunner = AntXmlRunListener(::logging, props) {
                     viewModelScope.launch {
                         toggleIsRunning(false)
-                        log("TEST", "<<< FINISH: ${plugin.name}${if(methodName != null) "#$methodName" else ""}", LogLevel.PASS)
+                        log("TEST", "FINISH: ${plugin.name}${if(methodName != null) "#$methodName" else ""}", LogLevel.PASS)
                     }
                 }
 
@@ -767,8 +764,8 @@ log("PLUGIN", message, internalLevel)
                 log("TEST", "summary.xslt not found in resources directory. Extracting from JAR...", LogLevel.INFO)
                 resourcesDir.mkdirs()
                 
-                val xsltInputStream = AppViewModel::class.java.getResourceAsStream("/summary.xslt") 
-                    ?: AppViewModel::class.java.classLoader.getResourceAsStream("summary.xslt")
+                val xsltInputStream = MainViewModel::class.java.getResourceAsStream("/summary.xslt") 
+                    ?: MainViewModel::class.java.classLoader.getResourceAsStream("summary.xslt")
                 
                 if (xsltInputStream == null) {
                     log("TEST", "summary.xslt not found in JAR resources", LogLevel.ERROR)
@@ -815,19 +812,11 @@ log("PLUGIN", message, internalLevel)
 
     // --- Existing ADB/UI logic (keep as is) ---
 
-    fun pressHome() = viewModelScope.launch { adbObserver.sendKeyEvent(3) }
-    fun pressBack() = viewModelScope.launch { adbObserver.sendKeyEvent(4) }
-    fun pressEnter() = viewModelScope.launch { adbObserver.sendKeyEvent(66) }
+    fun pressHome() = viewModelScope.launch { adbRepository.adbObserver.sendKeyEvent(3) }
+    fun pressBack() = viewModelScope.launch { adbRepository.adbObserver.sendKeyEvent(4) }
+    fun pressEnter() = viewModelScope.launch { adbRepository.adbObserver.sendKeyEvent(66) }
 
-    private fun startAdbObservation() {
-        viewModelScope.launch {
-            try {
-                adbObserver.observeAdb()
-            } catch (e: Exception) {
-                log("ADB", "Observer error: ${e.message}", LogLevel.ERROR)
-            }
-        }
-    }
+
 
     fun updateAdbState(isValid: Boolean, isUnauthorized: Boolean = false, serial: String = "", info: String = "") {
         // 状態が変わっていないなら何もしない
@@ -850,38 +839,9 @@ log("PLUGIN", message, internalLevel)
             log("ADB", "Status: ${if (isValid) "Connected ($serial)" else "Disconnected"}", if (isValid) LogLevel.PASS else LogLevel.ERROR)
         }
 
-        if (isValid && _isLogcatWindowOpen.value) {
-            startLogcat()
-        } else if (!isValid) {
-            stopLogcat()
-        }
-    }
-    fun openLogcatWindow() {
-        _isLogcatWindowOpen.value = true
-        // Just change the state, don't call startLogcat() here immediately (or call it safely)
-        startLogcat()
+
     }
 
-    fun closeLogcatWindow() {
-        _isLogcatWindowOpen.value = false
-    }
-
-    fun setToolWindowTab(index: Int) {
-        _selectedToolWindowTab.value = index
-    }
-
-    fun startLogcat() {
-        // Added: Guard against running ADB command when device is not connected
-        if (!uiState.value.adbIsValid) {
-            log("Logcat", "Waiting for device connection to start logcat...", LogLevel.WARN)
-            return
-        }
-        viewModelScope.launch { adbObserver.startLogcat() }
-    }
-
-    fun stopLogcat() {
-        adbObserver.stopLogcat()
-    }
 
     fun log(tag: String, message: String, level: LogLevel = LogLevel.INFO) {
         val timestamp = LocalTime.now().toString().take(8)
@@ -896,143 +856,38 @@ log("PLUGIN", message, internalLevel)
     }
 
     fun captureScreenshot() {
-        viewModelScope.launch { adbObserver.captureScreenshot() }
+        viewModelScope.launch { adbRepository.adbObserver.captureScreenshot() }
     }
 
     fun sendText(text: String) {
-        viewModelScope.launch { adbObserver.sendText(text) }
+        viewModelScope.launch { adbRepository.adbObserver.sendText(text) }
     }
-
 
 
     fun clearAppData() {
-        viewModelScope.launch { adbObserver.clearAppData("org.example.project") }
+        viewModelScope.launch { adbRepository.adbObserver.clearAppData("org.example.project") }
     }
 
-    fun clearLogcat() {
-        _logcatLines.clear(); viewModelScope.launch { adbObserver.clearLogcatBuffer() }
-    }
 
-    fun updateLogcatFilter(text: String) {
-        _logcatFilter.value = text
-    }
-
-    companion object {
-        private const val MAX_LOG_LINES = 2000
-    }
-
-    private var pendingLogLine: LogLine? = null
-
-    fun onLogcatReceived(rawLine: String) {
-
-        // 1. When a new header line arrives
-        if (LogcatParser.isHeader(rawLine)) {
-            flushPendingLog() // Flush the previous log
-            pendingLogLine = LogcatParser.parseHeader(rawLine)
-            return
-        }
-
-        // 2. When a blank line arrives (log separator)
-        if (rawLine.isBlank()) {
-            flushPendingLog() // Flush because it's a separator
-            return
-        }
-
-        // 3. Others (message body, stack trace, etc.)
-        pendingLogLine?.let { current ->
-            ProcessNameResolver.updateFromLog(current.tag, rawLine)
-            val newMessage =
-                if (current.message.isEmpty()) rawLine else "${current.message}\n$rawLine"
-            pendingLogLine = current.copy(message = newMessage)
-        }
-    }
-
-    private fun flushPendingLog() {
-        pendingLogLine?.let { log ->
-            // Add only if the message is not blank (to prevent garbage with only headers)
-            if (log.message.isNotBlank()) {
-                _logcatLines.add(log)
-                // Added: Record the fully constructed log (including process name) to a file
-                // Since this is I/O processing, consider moving it to another coroutine/thread if it becomes heavy
-                // (PrintWriter has an internal buffer, so it's usually fine as is)
-                viewModelScope.launch(Dispatchers.IO) {
-                    logRecorder.write(log)
-                }
-                // Buffer limit
-                val limit = appSettings.value.logcatBufferSize
-                if (_logcatLines.size > limit) {
-                    _logcatLines.removeRange(0, _logcatLines.size - limit)
-                }
-            }
-        }
-        pendingLogLine = null
-    }
-
-    // For forcibly flushing the remainder when the device is disconnected, etc.
-    fun flushLogcatBuffer() {
-        flushPendingLog()
-    }
     //Call when app closing
     override fun onCleared() {
         super.onCleared()
-        logRecorder.close()
         mainLogRecorder.close()
         mcpServer.stop()
     }
 
     fun setupMuttonAgent() {
         viewModelScope.launch {
-            adbObserver.setupMuttonAgent(forceInstall = false)
+            adbRepository.adbObserver.setupMuttonAgent(forceInstall = false)
         }
     }
 
     fun reinstallMuttonAgent() {
         viewModelScope.launch {
-            adbObserver.setupMuttonAgent(forceInstall = true)
+            adbRepository.adbObserver.setupMuttonAgent(forceInstall = true)
         }
     }
 
-    fun pingMuttonAgent() {
-        viewModelScope.launch {
-            adbObserver.pingMuttonAgent()
-        }
-    }
 
-    fun dumpMuttonAgent() {
-        viewModelScope.launch {
-            val response = adbObserver.dumpMuttonAgent(includeImage = true)
-            if (response != null && response.isNotEmpty()) {
-                try {
-                    val gson = Gson()
-                    val dumpResult = gson.fromJson(response, DumpResult::class.java)
-                    if (dumpResult != null && dumpResult.status == "ok") {
-                        val uiNode = gson.fromJson(dumpResult.output, UiNode::class.java)
-                        _uiDumpRoot.value = uiNode
-                        _uiDumpScreenWidth.value = dumpResult.screen_width
-                        _uiDumpScreenHeight.value = dumpResult.screen_height
-                        
-                        if (dumpResult.screenshot != null && dumpResult.screenshot.isNotEmpty()) {
-                            try {
-                                val bytes = Base64.getDecoder().decode(dumpResult.screenshot)
-                                val skiaImage = Image.makeFromEncoded(bytes)
-                                _uiDumpScreenshot.value = skiaImage.toComposeImageBitmap()
-                            } catch (e: Exception) {
-                                log("SYSTEM", "Failed to decode screenshot: ${e.message}", LogLevel.ERROR)
-                                _uiDumpScreenshot.value = null
-                            }
-                        } else {
-                            _uiDumpScreenshot.value = null
-                        }
-
-                        // Auto-open tool window and switch to UI Inspector tab
-                        openLogcatWindow()
-                        setToolWindowTab(1)
-                    }
-                } catch (e: Exception) {
-                    log("SYSTEM", "Failed to parse Dump JSON: \${e.message}", LogLevel.ERROR)
-                }
-            }
-        }
-    }
 
 }

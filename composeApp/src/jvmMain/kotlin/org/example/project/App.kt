@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
+import org.koin.compose.koinInject
 import java.io.File
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -46,7 +47,8 @@ import testbed_core.composeapp.generated.resources.ic_sheep
 @Composable
 @Preview
 fun App() {
-    val viewModel: AppViewModel = viewModel { AppViewModel() }
+    val viewModel: MainViewModel = viewModel { MainViewModel() }
+    val toolViewModel: ToolViewModel = koinInject()
     val logLines = remember { mutableStateListOf<LogLine>() }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showDeviceInfoDialog by remember { mutableStateOf(false) }
@@ -55,7 +57,7 @@ fun App() {
     LaunchedEffect(viewModel) {
 
         if (viewModel.appSettings.value.autoOpenLogcat) {
-            viewModel.openLogcatWindow()
+            toolViewModel.openWindow()
         }
         viewModel.logFlow.collect { log ->
 
@@ -67,7 +69,7 @@ fun App() {
     }
 
     val uiState by viewModel.uiState.collectAsState()
-    val isLogcatWindowOpen by viewModel.isLogcatWindowOpen.collectAsState()
+    val isLogcatWindowOpen by toolViewModel.isToolWindowOpen.collectAsState()
     val scope = rememberCoroutineScope()
     val drawerState =
         androidx.compose.material3.rememberDrawerState(initialValue =
@@ -94,8 +96,8 @@ fun App() {
                 ) {
                     TestListDrawerContent(
                         testPlugins = viewModel.testPlugins,
-                        onRunTest = { plugin ->
-                            viewModel.runTest(plugin)
+                        onRunTest = { plugin, methodName ->
+                            viewModel.runTest(plugin, methodName)
                             scope.launch { drawerState.close() }
                         },
                         onCloseRequest = {
@@ -124,7 +126,7 @@ fun App() {
                         onRefreshPlugins = { viewModel.refreshPlugins() },
                         onMenuClick = { scope.launch { drawerState.open() } },
                         onSetupAgentClick = { viewModel.setupMuttonAgent() },
-                        onLogcatClick = { viewModel.openLogcatWindow() }
+                        onLogcatClick = { toolViewModel.openWindow() }
                     )
                 },
                 content = { padding ->
@@ -162,7 +164,7 @@ fun App() {
             )
         }
         if (isLogcatWindowOpen) {
-            LogcatWindow(viewModel = viewModel, onCloseRequest = { viewModel.closeLogcatWindow() })
+            ToolWindow(viewModel = toolViewModel, onCloseRequest = { toolViewModel.closeWindow() })
         }
     }
 }
@@ -171,7 +173,7 @@ fun App() {
 @Composable
 fun TestListDrawerContent(
     testPlugins: List<TestPlugin>,
-    onRunTest: (TestPlugin) -> Unit,
+    onRunTest: (TestPlugin, String?) -> Unit,
     onCloseRequest: () -> Unit,
     onOpenResultsClick: () -> Unit,
     onImportPluginClick: (java.io.File) -> Unit
@@ -314,57 +316,127 @@ fun TestListDrawerContent(
                                 .padding(vertical = 4.dp, horizontal = 8.dp)
                                 .clickable { expandedItems[plugin.id] = !isItemExpanded }
                         ) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                // 左側: テキスト情報
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = plugin.title.ifBlank { plugin.shortName },
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White,
-                                        fontSize = 14.sp
-                                    )
-                                    Spacer(Modifier.height(4.dp))
-                                    
-                                    // 開閉状態に応じて文言を切り替え
-                                    val displayDesc = if (isItemExpanded) {
-                                        plugin.description.ifBlank { "No description available." }
-                                    } else {
-                                        if (plugin.description.length > 60) {
-                                            plugin.description.take(60) + "..."
-                                        } else {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    // 左側: テキスト情報
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = plugin.title.ifBlank { plugin.shortName },
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White,
+                                            fontSize = 14.sp
+                                        )
+                                        Spacer(Modifier.height(4.dp))
+                                        
+                                        // 開閉状態に応じて文言を切り替え
+                                        val displayDesc = if (isItemExpanded) {
                                             plugin.description.ifBlank { "No description available." }
+                                        } else {
+                                            if (plugin.description.length > 60) {
+                                                plugin.description.take(60) + "..."
+                                            } else {
+                                                plugin.description.ifBlank { "No description available." }
+                                            }
+                                        }
+                                        
+                                        Text(
+                                            text = displayDesc,
+                                            color = Color.LightGray,
+                                            fontSize = 12.sp,
+                                            lineHeight = 16.sp
+                                        )
+                                        
+                                        if (isItemExpanded) {
+                                            Spacer(Modifier.height(4.dp))
+                                            Text(
+                                                text = "Class: ${plugin.className}",
+                                                color = Color.Gray,
+                                                fontSize = 10.sp
+                                            )
                                         }
                                     }
                                     
-                                    Text(
-                                        text = displayDesc,
-                                        color = Color.LightGray,
-                                        fontSize = 12.sp,
-                                        lineHeight = 16.sp
-                                    )
+                                    Spacer(Modifier.width(8.dp))
                                     
-                                    if (isItemExpanded) {
-                                        Spacer(Modifier.height(4.dp))
-                                        Text(
-                                            text = "Class: ${plugin.className}",
-                                            color = Color.Gray,
-                                            fontSize = 10.sp
-                                        )
+                                    // 右側: 実行ボタン（やや大きめ）
+                                    Button(
+                                        onClick = { onRunTest(plugin, null) },
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF569CD6)),
+                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                                    ) {
+                                        Text("Run All", color = Color.White)
                                     }
                                 }
                                 
-                                Spacer(Modifier.width(8.dp))
-                                
-                                // 右側: 実行ボタン（やや大きめ）
-                                Button(
-                                    onClick = { onRunTest(plugin) },
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF569CD6)),
-                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                                ) {
-                                    Text("Run", color = Color.White)
+                                // 個別テスト実行用プルダウン
+                                if (plugin.methods.isNotEmpty()) {
+                                    Spacer(Modifier.height(8.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        var selectedMethod by remember { mutableStateOf(plugin.methods.first()) }
+                                        var expanded by remember { mutableStateOf(false) }
+                                        
+                                        Box(modifier = Modifier.weight(1f)) {
+                                            OutlinedTextField(
+                                                value = selectedMethod,
+                                                onValueChange = {},
+                                                readOnly = true,
+                                                label = { Text("Single Test", color = Color.Gray, fontSize = 10.sp) },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                textStyle = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 12.sp),
+                                                colors = OutlinedTextFieldDefaults.colors(
+                                                    focusedTextColor = Color.White,
+                                                    unfocusedTextColor = Color.White,
+                                                    focusedBorderColor = Color(0xFF569CD6),
+                                                    unfocusedBorderColor = Color.Gray,
+                                                    focusedContainerColor = Color.Transparent,
+                                                    unfocusedContainerColor = Color.Transparent
+                                                ),
+                                                trailingIcon = {
+                                                    Icon(
+                                                        imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                                        contentDescription = null,
+                                                        tint = Color.White
+                                                    )
+                                                }
+                                            )
+                                            // Overlay to catch clicks
+                                            Box(
+                                                modifier = Modifier
+                                                    .matchParentSize()
+                                                    .clickable { expanded = !expanded }
+                                            )
+                                            DropdownMenu(
+                                                expanded = expanded,
+                                                onDismissRequest = { expanded = false },
+                                                modifier = Modifier.background(Color(0xFF3C3F41))
+                                            ) {
+                                                plugin.methods.forEach { method ->
+                                                    DropdownMenuItem(
+                                                        text = { Text(method, color = Color.White) },
+                                                        onClick = {
+                                                            selectedMethod = method
+                                                            expanded = false
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        
+                                        Spacer(Modifier.width(8.dp))
+                                        
+                                        Button(
+                                            onClick = { onRunTest(plugin, selectedMethod) },
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6A8759)),
+                                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                                        ) {
+                                            Text("Run", color = Color.White)
+                                        }
+                                    }
                                 }
                             }
                         }

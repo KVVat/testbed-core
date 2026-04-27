@@ -42,6 +42,8 @@ kotlin {
             implementation(libs.adam)
             implementation(libs.junit) // commonMainでJUnitを利用可能にする
             implementation(libs.gson)
+            implementation(libs.koin.core)
+            implementation(libs.koin.compose)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)

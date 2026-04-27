@@ -2,6 +2,10 @@ package org.example.project
 
 import org.example.project.App
 import androidx.compose.ui.window.Window
+import org.koin.core.context.startKoin
+import org.koin.dsl.module
+import org.example.project.adb.AdbRepository
+import org.example.project.ToolViewModel
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import androidx.compose.ui.window.WindowPlacement
@@ -35,6 +39,13 @@ fun main() {
     val isWindows = System.getProperty("os.name").lowercase().contains("win")
     
     println("[BOOT] Application starting...")
+    
+    startKoin {
+        modules(module {
+            single { AdbRepository() }
+            single { ToolViewModel() }
+        })
+    }
     println("[BOOT] os.name=${System.getProperty("os.name")}")
     println("[BOOT] java.home=${System.getProperty("java.home")}")
     println("[BOOT] isWindows=$isWindows, transparent=${!isWindows}")

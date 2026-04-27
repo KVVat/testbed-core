@@ -37,7 +37,8 @@ data class TestPlugin(
     val shortName: String,
     val title: String = "",       // ★ 追加: 人間が読めるタイトル
     val description: String = "", // ★ 追加: テストの説明
-    val category: String = "(none)" // ★ 追加: カテゴリ
+    val category: String = "(none)", // ★ 追加: カテゴリ
+    val methods: List<String> = emptyList() // ★ 追加: テストメソッド一覧
 ) {
     // ★ 追加: 実行時に初めてURLClassLoaderを回してクラスを実体化するメソッド
     fun resolveClass(): Class<*> {

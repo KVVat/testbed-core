@@ -46,7 +46,7 @@ import kotlinx.serialization.json.putJsonObject
 import kotlinx.serialization.json.putJsonArray
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import org.example.project.adb.AdbObserver
-import org.example.project.AppViewModel
+import org.example.project.MainViewModel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import androidx.lifecycle.viewModelScope
@@ -57,7 +57,7 @@ import io.ktor.server.request.httpMethod
 import io.ktor.server.request.uri
 import io.ktor.server.application.call
 
-class McpSseServer(private val adbObserver: AdbObserver, private val appViewModel: AppViewModel) {
+class McpSseServer(private val adbObserver: AdbObserver, private val appViewModel: MainViewModel) {
 
     private var mcpServerInstance: Server? = null
 

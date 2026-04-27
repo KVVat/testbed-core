@@ -50,16 +50,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 
 @Composable
-fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
+fun ToolWindow(viewModel: ToolViewModel, onCloseRequest: () -> Unit) {
     val windowState = rememberWindowState(width = 1000.dp, height = 700.dp)
-    val appSettings by viewModel.appSettings.collectAsState()
     val logcatLines = viewModel.logcatLines
     val logcatFilter by viewModel.logcatFilter.collectAsState()
-    val selectedTab by viewModel.selectedToolWindowTab.collectAsState()
+    val selectedTab by viewModel.selectedTab.collectAsState()
     val uiDumpRoot by viewModel.uiDumpRoot.collectAsState()
     val uiDumpScreenshot by viewModel.uiDumpScreenshot.collectAsState()
     val uiDumpScreenWidth by viewModel.uiDumpScreenWidth.collectAsState()
     val uiDumpScreenHeight by viewModel.uiDumpScreenHeight.collectAsState()
+    val logcatBufferSize = viewModel.logcatBufferSize
 
     // UI状態
     var isCompactMode by remember { mutableStateOf(false) } // Compact vs Standard
@@ -71,11 +71,9 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
     val listState = rememberLazyListState()
 
     // フィルタリング
-    // フィルタ文字列のパース（テキスト変更時のみ再計算）
     val parsedFilter = remember(logcatFilter) {
         LogcatFilter.parse(logcatFilter)
     }
-    // ログマッチング（ログ到着/フィルタ変更/レベル変更時のみ再計算）
     val filteredLogs = remember(logcatLines.size, parsedFilter, selectedLevels.size) {
         logcatLines.filter { logcatLine ->
             LogcatFilter.matches(logcatLine, parsedFilter, selectedLevels)
@@ -94,9 +92,9 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
     Window(
         onCloseRequest = onCloseRequest, 
         state = windowState, 
-        title = "Logcat Pro",
+        title = "Tool Window",
         undecorated = true,
-        transparent = !isWindows  // Windowsではtransparent非対応(VM環境でウィンドウが見えなくなる)
+        transparent = !isWindows
     ) {
         MaterialTheme(colorScheme = darkColorScheme()) {
             Surface(
@@ -116,7 +114,7 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                "Logcat Pro",
+                                "Tool Window",
                                 color = Color.LightGray,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold
@@ -271,12 +269,12 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
                     ) {
                         Tab(
                             selected = selectedTab == 0,
-                            onClick = { viewModel.setToolWindowTab(0) },
+                            onClick = { viewModel.setTab(0) },
                             text = { Text("Logcat") }
                         )
                         Tab(
                             selected = selectedTab == 1,
-                            onClick = { viewModel.setToolWindowTab(1) },
+                            onClick = { viewModel.setTab(1) },
                             text = { Text("UI Inspector") }
                         )
                     }
@@ -285,12 +283,12 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
                         // 上部: フィルタリングバー
                         LogcatTopBar(
                         filterText = logcatFilter,
-                        onFilterChange = { viewModel.updateLogcatFilter(it) },
+                        onFilterChange = { text -> viewModel.updateLogcatFilter(text) },
                         selectedLevels = selectedLevels,
                         onLevelMenuOpen = { expandedLevelMenu = true },
                         levelMenuExpanded = expandedLevelMenu,
                         onLevelMenuDismiss = { expandedLevelMenu = false },
-                        onToggleLevel = { level ->
+                        onToggleLevel = { level: LogLevel ->
                             if (selectedLevels.contains(level)) {
                                 if (selectedLevels.size > 1) selectedLevels.remove(level)
                             } else {
@@ -333,7 +331,7 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
                         // フッター (ステータスバー)
                         LogcatFooter(
                             currentCount = logcatLines.size,
-                            maxCount = appSettings.logcatBufferSize,
+                            maxCount = logcatBufferSize,
                             filteredCount = filteredLogs.size
                         )
                     } else {
@@ -351,9 +349,7 @@ fun LogcatWindow(viewModel: AppViewModel, onCloseRequest: () -> Unit) {
             } // end Surface
         } // end MaterialTheme
     } // end Window
-} // end fun
-
-// --- コンポーネント定義 ---
+}
 
 @Composable
 fun LogcatTopBar(
@@ -372,7 +368,6 @@ fun LogcatTopBar(
             .padding(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Filter TextField
         OutlinedTextField(
             value = filterText,
             onValueChange = onFilterChange,
@@ -443,14 +438,13 @@ fun LogcatTopBar(
     }
 }
 
-
 @Composable
 fun StandardLogItem(log :LogLine,isSoftWrap:Boolean){
     val levelColor = when (log.level) {
-        LogLevel.DEBUG -> Color(0xFF299999) // Cyan-ish
-        LogLevel.INFO -> Color(0xFFBBBBBB)  // Light Gray
-        LogLevel.WARN -> Color(0xFFFFC66D)  // Orange
-        LogLevel.ERROR -> Color(0xFFFF6B68) // Red
+        LogLevel.DEBUG -> Color(0xFF299999)
+        LogLevel.INFO -> Color(0xFFBBBBBB)
+        LogLevel.WARN -> Color(0xFFFFC66D)
+        LogLevel.ERROR -> Color(0xFFFF6B68)
         else -> Color.Gray
     }
    Row(modifier = Modifier.padding(vertical = 1.dp), verticalAlignment = Alignment.Top) {
@@ -467,7 +461,6 @@ fun StandardLogItem(log :LogLine,isSoftWrap:Boolean){
         Text(text = buildAnnotatedString {
                 append("${log.timestamp}  ")
                 append(log.pid)
-                // ★パッケージ名が判明していれば表示
                 log.packageName?.let { pkg ->
                     append(" ($pkg)")
                 }
@@ -478,51 +471,7 @@ fun StandardLogItem(log :LogLine,isSoftWrap:Boolean){
             lineHeight = 18.sp, softWrap = isSoftWrap)
     }
 }
-@Composable
-fun StandardLogItem_(log: LogLine) {
-    val levelColor = when (log.level) {
-        LogLevel.DEBUG -> Color(0xFF299999) // Cyan-ish
-        LogLevel.INFO -> Color(0xFFBBBBBB)  // Light Gray
-        LogLevel.WARN -> Color(0xFFFFC66D)  // Orange
-        LogLevel.ERROR -> Color(0xFFFF6B68) // Red
-        else -> Color.Gray
-    }
 
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
-        // 左端: レベルを表すカラーバー (アイコン代わりの視認性確保)
-        Box(
-            modifier = Modifier
-                .width(8.dp)
-                .fillMaxHeight()
-                .background(levelColor)
-        )
-
-
-        // 1行目: ヘッダー情報 (暗めの色で)
-        // 例: 02-13 17:02:12.123 D/Tag
-        Text(
-            text = buildAnnotatedString {
-                withStyle(SpanStyle(color = Color.Gray)) {
-                    append("${log.timestamp}  ")
-                }
-                withStyle(SpanStyle(color = levelColor, fontWeight = FontWeight.Bold)) {
-                    append("${log.level.name.first()}/${log.tag}")
-                }
-            },
-            fontFamily = FontFamily.Monospace,
-            fontSize = 12.sp
-        )
-
-        // 2行目以降: メッセージ本文 (白でくっきり、改行あり)
-        Text(
-            text = log.message,
-            color = if (log.level == LogLevel.ERROR) Color(0xFFFF6B68) else Color(0xFFE0E0E0),
-            fontFamily = FontFamily.Monospace,
-            fontSize = 13.sp,
-            modifier = Modifier.padding(start = 16.dp) // インデントをつけて見やすく
-        )
-    }
-}
 @Composable
 fun CompactLogItem(log: LogLine,isSoftWrap:Boolean) {
     val levelColor = when (log.level) {
@@ -536,10 +485,9 @@ fun CompactLogItem(log: LogLine,isSoftWrap:Boolean) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 1.dp) // 上下の余白を詰める
-            .height(IntrinsicSize.Min) // 高さを揃える
+            .padding(vertical = 1.dp)
+            .height(IntrinsicSize.Min)
     ) {
-        // 左端: レベルを表すカラーバー (アイコン代わりの視認性確保)
         Box(
             modifier = Modifier
                 .width(8.dp)
@@ -549,28 +497,23 @@ fun CompactLogItem(log: LogLine,isSoftWrap:Boolean) {
 
         Spacer(Modifier.width(4.dp))
 
-        // 時刻のみ: 幅を広げて折り返し防止
         val timeOnly = if (log.timestamp.length > 14) log.timestamp.substring(6,14) else log.timestamp
 
         val annotatedString = buildAnnotatedString {
-            // 1. メタデータ部分 (時刻 PID TAGなど)
             withStyle(style = SpanStyle(color = Color.White, fontSize = 13.sp, fontFamily = FontFamily.Monospace)) {
                 append("${timeOnly} ")
             }
-            // 2. 本文メッセージ
             withStyle(style = SpanStyle(color = levelColor, fontSize = 13.sp, fontFamily = FontFamily.Monospace)) {
                 append(log.message.replace("\n", " "))
             }
         }
-        // メッセージ
         Text(
             text = annotatedString,
             color = levelColor,
             fontFamily = FontFamily.Monospace,
             fontSize = 13.sp,
             lineHeight = 16.sp,
-            //maxLines = 1, // ★1行制限
-            overflow = TextOverflow.Ellipsis, // ★あふれたら "..."
+            overflow = TextOverflow.Ellipsis,
             softWrap = isSoftWrap,
             modifier = Modifier
                 .weight(1f)

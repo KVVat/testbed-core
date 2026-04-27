@@ -24,7 +24,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.example.project.AppViewModel
 import org.example.project.JUnitBridge
 import org.example.project.LogLevel
 import org.example.project.adb.rules.AdbDeviceRule
@@ -38,17 +37,38 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CoroutineScope
 
-class AdbObserver(private val viewModel: AppViewModel) {
+class AdbObserver(private val scope: CoroutineScope) {
 
     var adb: AdbDeviceRule = AdbDeviceRule()
     var adbProps: AdbProps = AdbProps()
+    var isRunning: Boolean = false
     private var logcatJob: Job? = null
     
     // Agent Streams
     private var screenshotStreamJob: Job? = null
     private val _screenshotStream = MutableSharedFlow<String>(extraBufferCapacity = 10)
     val screenshotStream = _screenshotStream.asSharedFlow()
+
+    // New flows for logs and state
+    private val _logs = MutableSharedFlow<LogEvent>(extraBufferCapacity = 100)
+    val logs = _logs.asSharedFlow()
+
+    private val _adbState = MutableStateFlow(AdbState())
+    val adbState = _adbState.asStateFlow()
+
+    private val _logcatLines = MutableSharedFlow<String>(extraBufferCapacity = 1000)
+    val logcatLines = _logcatLines.asSharedFlow()
+
+    private val _logcatFlush = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val logcatFlush = _logcatFlush.asSharedFlow()
+
+    private fun log(tag: String, message: String, level: LogLevel = LogLevel.INFO) {
+        _logs.tryEmit(LogEvent(tag, message, level))
+    }
 
     // Mutton Agentの設定
     private val AGENT_APK_NAME = "mutton-agent.apk"
@@ -108,21 +128,21 @@ class AdbObserver(private val viewModel: AppViewModel) {
     fun checkDependencies(): Boolean {
         val path = resolveAdbPath()
         if (path == null) {
-            viewModel.log("SETUP", "Critical: 'adb' not found. Run the setup script for your OS.", LogLevel.ERROR)
+            log("SETUP", "Critical: 'adb' not found. Run the setup script for your OS.", LogLevel.ERROR)
             return false
         }
-        viewModel.log("SETUP", "ADB resolved: $path", LogLevel.PASS)
+        log("SETUP", "ADB resolved: $path", LogLevel.PASS)
         return true
     }
 
     suspend fun captureScreenshot() {
-        if (!viewModel.uiState.value.adbIsValid) {
-            viewModel.log("ADB", "Cannot take screenshot: No device connected.", LogLevel.ERROR)
+        if (!adbState.value.isValid) {
+            log("ADB", "Cannot take screenshot: No device connected.", LogLevel.ERROR)
             return
         }
         withContext(Dispatchers.IO) {
             try {
-                viewModel.log("ADB", "Taking screenshot...", LogLevel.INFO)
+                log("ADB", "Taking screenshot...", LogLevel.INFO)
                 val serial = adb.deviceSerial
                 val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
                 val remotePath = "/sdcard/screenshot_tmp.png"
@@ -135,15 +155,15 @@ class AdbObserver(private val viewModel: AppViewModel) {
                 for (progress in channel) { }
 
                 adb.adb.execute(ShellCommandRequest("rm $remotePath"), serial)
-                viewModel.log("ADB", "Screenshot saved: ${localFile.absolutePath}", LogLevel.PASS)
+                log("ADB", "Screenshot saved: ${localFile.absolutePath}", LogLevel.PASS)
             } catch (e: Exception) {
-                viewModel.log("ADB", "Screenshot failed: ${e.message}", LogLevel.ERROR)
+                log("ADB", "Screenshot failed: ${e.message}", LogLevel.ERROR)
             }
         }
     }
 
     suspend fun sendText(text: String) {
-        if (!viewModel.uiState.value.adbIsValid) return
+        if (!adbState.value.isValid) return
         if (text.isBlank()) return
 
         withContext(Dispatchers.IO) {
@@ -152,47 +172,47 @@ class AdbObserver(private val viewModel: AppViewModel) {
                 val command = "input text $escapedText"
                 val result = adb.adb.execute(ShellCommandRequest(command), adb.deviceSerial)
                 if (result.exitCode == 0) {
-                    viewModel.log("ADB", "Text sent: $text", LogLevel.PASS)
+                    log("ADB", "Text sent: $text", LogLevel.PASS)
                 } else {
-                    viewModel.log("ADB", "Input Failed: ${result.output}", LogLevel.ERROR)
+                    log("ADB", "Input Failed: ${result.output}", LogLevel.ERROR)
                 }
             } catch (e: Exception) {
-                viewModel.log("ADB", "Exception sending text: ${e.message}", LogLevel.ERROR)
+                log("ADB", "Exception sending text: ${e.message}", LogLevel.ERROR)
             }
         }
     }
 
     suspend fun clearAppData(packageName: String) {
-        if (!viewModel.uiState.value.adbIsValid) return
+        if (!adbState.value.isValid) return
         try {
             val output = adb.adb.execute(ShellCommandRequest("pm clear $packageName"), adb.deviceSerial)
             if (output.output.contains("Success")) {
-                viewModel.log("ADB", "Cleared app data for $packageName", LogLevel.INFO)
+                log("ADB", "Cleared app data for $packageName", LogLevel.INFO)
             }
         } catch (e: Exception) {
-            viewModel.log("ADB", "Clear data failed: ${e.message}", LogLevel.ERROR)
+            log("ADB", "Clear data failed: ${e.message}", LogLevel.ERROR)
         }
     }
 
     suspend fun rebootToBootloader() {
-        if (!viewModel.uiState.value.adbIsValid) return
+        if (!adbState.value.isValid) return
         withContext(Dispatchers.IO) {
             try {
                 adb.adb.execute(RebootRequest(RebootMode.BOOTLOADER), adb.deviceSerial)
-                viewModel.log("ADB", "Rebooting to bootloader...", LogLevel.PASS)
+                log("ADB", "Rebooting to bootloader...", LogLevel.PASS)
             } catch (e: Exception) {
-                viewModel.log("ADB", "Reboot failed: ${e.message}", LogLevel.ERROR)
+                log("ADB", "Reboot failed: ${e.message}", LogLevel.ERROR)
             }
         }
     }
 
     suspend fun sendKeyEvent(keyCode: Int) {
-        if (!viewModel.uiState.value.adbIsValid) return
+        if (!adbState.value.isValid) return
         withContext(Dispatchers.IO) {
             try {
                 adb.adb.execute(ShellCommandRequest("input keyevent $keyCode"), adb.deviceSerial)
             } catch (e: Exception) {
-                viewModel.log("ADB", "Key event failed: ${e.message}", LogLevel.ERROR)
+                log("ADB", "Key event failed: ${e.message}", LogLevel.ERROR)
             }
         }
     }
@@ -209,19 +229,19 @@ class AdbObserver(private val viewModel: AppViewModel) {
             }
             ProcessNameResolver.updateBulk(map)
         }catch (e: Exception){
-            viewModel.log("ADB", "Failed to fetch process list: ${e.message}", LogLevel.WARN)
+            log("ADB", "Failed to fetch process list: ${e.message}", LogLevel.WARN)
         }
     }
 
-    suspend fun startLogcat() {
+    suspend fun startLogcat(pastMinutes: Int = 10) {
         ProcessNameResolver.clear()
         fetchProcessList()
 
         val serial = adb.deviceSerial
-        if (!viewModel.uiState.value.adbIsValid || serial.isBlank()) return
+        if (!adbState.value.isValid || serial.isBlank()) return
         if (logcatJob?.isActive == true) return
 
-        logcatJob = viewModel.viewModelScope.launch(Dispatchers.IO) {
+        logcatJob = scope.launch(Dispatchers.IO) {
             val buffer = StringBuilder()
             try {
                 //Preapre large buffer for logcat
@@ -230,7 +250,7 @@ class AdbObserver(private val viewModel: AppViewModel) {
                 val logChannel: ReceiveChannel<String> = adb.adb.execute(
                     request = ChanneledLogcatRequest(
                         since = com.malinskiy.adam.request.logcat.LogcatSinceFormat.TimeStamp(
-                            java.time.Instant.now().minusSeconds(viewModel.appSettings.value.logcatPastMinutes * 60L)
+                            java.time.Instant.now().minusSeconds(pastMinutes * 60L)
                         ),
                         modes = listOf(LogcatReadMode.long,)
                         //,buffers = listOf(LogcatBuffer.all)
@@ -244,16 +264,16 @@ class AdbObserver(private val viewModel: AppViewModel) {
                     while (buffer.contains("\n")) {
                         val index = buffer.indexOf("\n")
                         val line = buffer.substring(0, index).trimEnd('\r', '\n')
-                        if (line.isNotBlank()) viewModel.onLogcatReceived(line)
+                        if (line.isNotBlank()) _logcatLines.tryEmit(line)
                         buffer.delete(0, index + 1)
                     }
                 }
             } catch (e: Exception) {
                 if (e !is kotlinx.coroutines.CancellationException) {
-                    viewModel.log("Logcat", "Stream error: ${e.message}", LogLevel.ERROR)
+                    log("Logcat", "Stream error: ${e.message}", LogLevel.ERROR)
                 }
             } finally {
-                viewModel.flushLogcatBuffer()
+                _logcatFlush.tryEmit(Unit)
                 buffer.clear()
             }
         }
@@ -266,25 +286,25 @@ class AdbObserver(private val viewModel: AppViewModel) {
 
     // ★ Mutton Agentのデプロイと起動
     suspend fun setupMuttonAgent(forceInstall: Boolean = false) {
-        if (!viewModel.uiState.value.adbIsValid) return
+        if (!adbState.value.isValid) return
 
         withContext(Dispatchers.IO) {
             try {
                 val serial = adb.deviceSerial
-                viewModel.log("Agent", "Initializing Mutton Agent...", LogLevel.INFO)
+                log("Agent", "Initializing Mutton Agent...", LogLevel.INFO)
 
                 // 1. ローカルAPKの特定 (JUnitBridge.resourceDirを使用)
                 // composeResources/mutton-agent.apk はビルド後、resources に配置される想定
                 val localApk = File(JUnitBridge.resourceDir, "$AGENT_APK_NAME")
 
                 if (!localApk.exists()) {
-                    viewModel.log("Agent", "Agent APK not found at: ${localApk.absolutePath}. Did you build the APK?", LogLevel.ERROR)
+                    log("Agent", "Agent APK not found at: ${localApk.absolutePath}. Did you build the APK?", LogLevel.ERROR)
                     return@withContext
                 }
 
                 // 2. ポートフォワード設定
                 // PC: LOCAL_FORWARD_PORT -> Android: abstract socket "mutton_agent"
-                viewModel.log("Agent", "Setting up port forwarding (tcp:$LOCAL_FORWARD_PORT -> localabstract:$AGENT_SOCKET_NAME)...", LogLevel.INFO)
+                log("Agent", "Setting up port forwarding (tcp:$LOCAL_FORWARD_PORT -> localabstract:$AGENT_SOCKET_NAME)...", LogLevel.INFO)
                 try {
                     adb.adb.execute(
                         PortForwardRequest(
@@ -295,7 +315,7 @@ class AdbObserver(private val viewModel: AppViewModel) {
                         )
                     )
                 } catch (e: Exception) {
-                    viewModel.log("Agent", "Port forwarding failed: ${e.message}", LogLevel.WARN)
+                    log("Agent", "Port forwarding failed: ${e.message}", LogLevel.WARN)
                 }
 
                 // 3. すでにエージェントプロセスが動作しているかサイレントにチェック
@@ -305,11 +325,11 @@ class AdbObserver(private val viewModel: AppViewModel) {
                 var isAgentRunning = false
                 if (!forceInstall) {
                     // Port forwarding might take a moment to be fully active. Retry a few times.
-                    viewModel.log("Agent", "Pinging agent to check if already running...", LogLevel.INFO)
+                    log("Agent", "Pinging agent to check if already running...", LogLevel.INFO)
                     for (i in 1..5) {
                         val pingResponse = sendToAgent("{\"cmd\":\"ping\"}", silent = false, timeoutMs = 500) // Removed silent to get error logs
                         if (pingResponse != null && pingResponse.contains("\"status\":\"pong\"")) {
-                            viewModel.log("Agent", "Agent is already running. Skipping deployment to preserve UiAutomation state.", LogLevel.PASS)
+                            log("Agent", "Agent is already running. Skipping deployment to preserve UiAutomation state.", LogLevel.PASS)
                             isAgentRunning = true
                             break
                         }
@@ -331,10 +351,10 @@ class AdbObserver(private val viewModel: AppViewModel) {
                 } catch (_: Exception) { false }
 
                 if (isInstalled && !forceInstall) {
-                    viewModel.log("Agent", "Agent APK is already installed. Skipping push and install.", LogLevel.INFO)
+                    log("Agent", "Agent APK is already installed. Skipping push and install.", LogLevel.INFO)
                 } else {
                     // 3. APKのプッシュ
-                    viewModel.log("Agent", "Pushing agent APK to device...", LogLevel.INFO)
+                    log("Agent", "Pushing agent APK to device...", LogLevel.INFO)
                     val pushChannel = adb.adb.execute(
                         PushFileRequest(localApk, REMOTE_AGENT_PATH),
                         this,
@@ -344,38 +364,38 @@ class AdbObserver(private val viewModel: AppViewModel) {
                     for (progress in pushChannel) {
                         // プログレス表示が必要ならここで
                     }
-                    viewModel.log("Agent", "Agent pushed successfully.", LogLevel.PASS)
+                    log("Agent", "Agent pushed successfully.", LogLevel.PASS)
 
                     // 3.5 APKのインストール
-                    viewModel.log("Agent", "Installing agent APK...", LogLevel.INFO)
+                    log("Agent", "Installing agent APK...", LogLevel.INFO)
                     val installResult = adb.adb.execute(ShellCommandRequest("pm install -r -t $REMOTE_AGENT_PATH"), serial)
                     if (installResult.output.contains("Success")) {
-                        viewModel.log("Agent", "Agent installed successfully.", LogLevel.PASS)
+                        log("Agent", "Agent installed successfully.", LogLevel.PASS)
                     } else {
-                        viewModel.log("Agent", "Agent installation failed: ${installResult.output}", LogLevel.ERROR)
+                        log("Agent", "Agent installation failed: ${installResult.output}", LogLevel.ERROR)
                     }
                 }
 
                     // 5. エージェントの起動 (am instrument)
                     // バックグラウンドで実行し続けるため、コルーチンで監視する
-                    viewModel.log("Agent", "Starting agent process...", LogLevel.INFO)
-                    viewModel.viewModelScope.launch(Dispatchers.IO) {
+                    log("Agent", "Starting agent process...", LogLevel.INFO)
+                    scope.launch(Dispatchers.IO) {
                         try {
                             // am instrument で androidx.test.runner.AndroidJUnitRunner を起動
                             val cmd = "am instrument -w org.example.mutton.test/androidx.test.runner.AndroidJUnitRunner"
                             adb.adb.execute(ShellCommandRequest(cmd), serial)
                         } catch (e: Exception) {
                             // プロセスが終了した場合やエラー時
-                            viewModel.log("Agent", "Agent process terminated or failed: ${e.message}", LogLevel.WARN)
+                            log("Agent", "Agent process terminated or failed: ${e.message}", LogLevel.WARN)
                         }
                     }
 
-                    viewModel.log("Agent", "Agent start command issued.", LogLevel.PASS)
+                    log("Agent", "Agent start command issued.", LogLevel.PASS)
                 }
 
                 // Wait for the agent to boot up and be ready if we just started it
                 if (!isAgentRunning) {
-                    viewModel.log("Agent", "Waiting for agent to become responsive...", LogLevel.INFO)
+                    log("Agent", "Waiting for agent to become responsive...", LogLevel.INFO)
                     var responsive = false
                     for (i in 1..20) { // Up to 5 seconds
                         val pingResponse = sendToAgent("{\"cmd\":\"ping\"}", silent = true, timeoutMs = 500)
@@ -386,21 +406,21 @@ class AdbObserver(private val viewModel: AppViewModel) {
                         delay(250)
                     }
                     if (responsive) {
-                        viewModel.log("Agent", "Agent is now responsive and ready.", LogLevel.PASS)
+                        log("Agent", "Agent is now responsive and ready.", LogLevel.PASS)
                     } else {
-                        viewModel.log("Agent", "Agent failed to respond after starting. Check Logcat for agent crashes.", LogLevel.ERROR)
+                        log("Agent", "Agent failed to respond after starting. Check Logcat for agent crashes.", LogLevel.ERROR)
                     }
                 }
 
                 val version = getMuttonAgentVersion()
                 if (version != null) {
-                    viewModel.log("Agent", "Active Agent Version: $version", LogLevel.INFO)
+                    log("Agent", "Active Agent Version: $version", LogLevel.INFO)
                 } else {
-                    viewModel.log("Agent", "Failed to retrieve agent version.", LogLevel.WARN)
+                    log("Agent", "Failed to retrieve agent version.", LogLevel.WARN)
                 }
 
             } catch (e: Exception) {
-                viewModel.log("Agent", "Setup failed: ${e.message}", LogLevel.ERROR)
+                log("Agent", "Setup failed: ${e.message}", LogLevel.ERROR)
             }
         }
     }
@@ -412,20 +432,20 @@ class AdbObserver(private val viewModel: AppViewModel) {
             var backgroundMonitorJob: Job? = null
             try {
                 // 1. 最速検知ループ (そのまま)
-                backgroundMonitorJob = viewModel.viewModelScope.launch(Dispatchers.IO) {
+                backgroundMonitorJob = scope.launch(Dispatchers.IO) {
                     while (isActive) {
                         if (adb.isUnauthorized) {
                             val earlySerial = adb.getSerialEarly() ?: ""
-                            if (!viewModel.uiState.value.isUnauthorized) {
-                                viewModel.updateAdbState(isValid = false, isUnauthorized = true,serial=earlySerial)
+                            if (!adbState.value.isUnauthorized) {
+                                _adbState.value = adbState.value.copy(isValid = false, isUnauthorized = true, deviceSerial = earlySerial)
                             }
-                        } else if (viewModel.uiState.value.isUnauthorized) {
+                        } else if (adbState.value.isUnauthorized) {
                             // ★追加: 未認可フラグが消えた（許可された or 抜かれた）
                             // 端末が1つも見つからないなら「USBが抜かれた」と判断してDisconnectedに戻す
                             val earlySerial = adb.getSerialEarly()
                             if (earlySerial == null) {
                                 //adb.isUnauthorized = false
-                                viewModel.updateAdbState(isValid = false, isUnauthorized = false)
+                                _adbState.value = adbState.value.copy(isValid = false, isUnauthorized = false)
                             }
                         }
                         val earlySerial = adb.getSerialEarly()
@@ -445,7 +465,7 @@ class AdbObserver(private val viewModel: AppViewModel) {
                 // 完全起動後の処理
                 while (currentCoroutineContext().isActive) {
                     delay(1000)
-                    if (viewModel.uiState.value.isRunning) continue
+                    if (isRunning) continue
 
                     if (adb.isDeviceInitialised()) {
                         try {
@@ -454,8 +474,8 @@ class AdbObserver(private val viewModel: AppViewModel) {
 
                             // ★ 2. 未認可(Unauthorized)の判定
                             if (currentDevice?.state == DeviceState.UNAUTHORIZED) {
-                                if (!viewModel.uiState.value.isUnauthorized) {
-                                    viewModel.updateAdbState(isValid = false, isUnauthorized = true)
+                                if (!adbState.value.isUnauthorized) {
+                                    _adbState.value = adbState.value.copy(isValid = false, isUnauthorized = true)
                                 }
                                 continue // 未認可の場合はここでループをやり直し、echoコマンドを打たない
                             }
@@ -464,11 +484,11 @@ class AdbObserver(private val viewModel: AppViewModel) {
                             adb.adb.execute(ShellCommandRequest("echo"), adb.deviceSerial)
 
                             // 成功した場合はUIを Authorized (Active) 状態に更新
-                            /*if (!viewModel.uiState.value.adbIsValid || viewModel.uiState.value.isUnauthorized) {
+                            /*if (!adbState.value.isValid || adbState.value.isUnauthorized) {
                                 adbProps = AdbProps(adb.osversion, adb.productmodel, adb.deviceSerial, adb.displayId)
-                                viewModel.updateAdbState(isValid = true, isUnauthorized = false)
+                                _adbState.value = adbState.value.copy(isValid = true, isUnauthorized = false)
                             }*/
-                            if (!viewModel.uiState.value.adbIsValid || viewModel.uiState.value.isUnauthorized) {
+                            if (!adbState.value.isValid || adbState.value.isUnauthorized) {
                                 adbProps = AdbProps(adb.osversion, adb.productmodel, adb.deviceSerial, adb.displayId)
 
                                 // ★ 表示用の文字列を組み立てる
@@ -479,19 +499,19 @@ class AdbObserver(private val viewModel: AppViewModel) {
                                     Display ID: ${adbProps.displayId}
                                 """.trimIndent()
 
-                                viewModel.updateAdbState(
+                                _adbState.value = adbState.value.copy(
                                     isValid = true,
                                     isUnauthorized = false,
-                                    serial = adbProps.serial,
-                                    info = infoStr
+                                    deviceSerial = adbProps.serial,
+                                    deviceInfo = infoStr
                                 )
 
-                                viewModel.log("Adb", "Device Auth Success:\n$infoStr", LogLevel.PASS)
+                                log("Adb", "Device Auth Success:\n$infoStr", LogLevel.PASS)
 
                                 // ★ Agentの自動セットアップとバージョン確認を出力
                                 setupMuttonAgent(forceInstall = false)
                                 val v = getMuttonAgentVersion()
-                                viewModel.log("Adb", "Current Agent Version: ${v ?: "Unknown"}", LogLevel.INFO)
+                                log("Adb", "Current Agent Version: ${v ?: "Unknown"}", LogLevel.INFO)
                             }
                         } catch (e: Exception) {
                             throw e
@@ -501,8 +521,8 @@ class AdbObserver(private val viewModel: AppViewModel) {
             } catch (e: Exception) {
                 backgroundMonitorJob?.cancel()
                 // 完全な切断時
-                if (viewModel.uiState.value.adbIsValid || viewModel.uiState.value.isUnauthorized) {
-                    viewModel.updateAdbState(isValid = false, isUnauthorized = false)
+                if (adbState.value.isValid || adbState.value.isUnauthorized) {
+                    _adbState.value = adbState.value.copy(isValid = false, isUnauthorized = false)
                     stopLogcat()
                 }
                 delay(1000)
@@ -510,7 +530,7 @@ class AdbObserver(private val viewModel: AppViewModel) {
         }
     }
     private suspend fun sendToAgent(jsonCmd: String, silent: Boolean = false, timeoutMs: Int = 5000): String? {
-        if (!viewModel.uiState.value.adbIsValid) return null
+        if (!adbState.value.isValid) return null
 
         return withContext(Dispatchers.IO) {
             try {
@@ -529,7 +549,7 @@ class AdbObserver(private val viewModel: AppViewModel) {
                 }
             } catch (e: Exception) {
                 if (!silent) {
-                    viewModel.log("Agent", "Communication failed: ${e.message} (Is agent running?)", LogLevel.ERROR)
+                    log("Agent", "Communication failed: ${e.message} (Is agent running?)", LogLevel.ERROR)
                 }
                 null
             }
@@ -537,13 +557,13 @@ class AdbObserver(private val viewModel: AppViewModel) {
     }
 
     suspend fun startScreenshotStream(fps: Float = 1f, quality: Int = 2) {
-        if (!viewModel.uiState.value.adbIsValid) return
+        if (!adbState.value.isValid) return
         if (screenshotStreamJob?.isActive == true) return
 
-        viewModel.log("Agent", "Starting screenshot stream at $fps fps...", LogLevel.INFO)
+        log("Agent", "Starting screenshot stream at $fps fps...", LogLevel.INFO)
         val jsonCmd = "{\"cmd\":\"start_stream\",\"fps\":$fps,\"image_quality\":$quality}"
         
-        screenshotStreamJob = viewModel.viewModelScope.launch(Dispatchers.IO) {
+        screenshotStreamJob = scope.launch(Dispatchers.IO) {
             try {
                 Socket("127.0.0.1", LOCAL_FORWARD_PORT).use { socket ->
                     socket.soTimeout = 0 // Stream is long-lived
@@ -562,7 +582,7 @@ class AdbObserver(private val viewModel: AppViewModel) {
                 }
             } catch (e: Exception) {
                 if (e !is kotlinx.coroutines.CancellationException) {
-                    viewModel.log("Agent", "Screenshot stream failed: ${e.message}", LogLevel.ERROR)
+                    log("Agent", "Screenshot stream failed: ${e.message}", LogLevel.ERROR)
                 }
             }
         }
@@ -572,85 +592,85 @@ class AdbObserver(private val viewModel: AppViewModel) {
         screenshotStreamJob?.cancel()
         screenshotStreamJob = null
         sendToAgent("{\"cmd\":\"stop_stream\"}", silent = true)
-        viewModel.log("Agent", "Screenshot stream stopped.", LogLevel.INFO)
+        log("Agent", "Screenshot stream stopped.", LogLevel.INFO)
     }
 
     suspend fun pingMuttonAgent() {
-        viewModel.log("Agent", "Pinging agent at 127.0.0.1:$LOCAL_FORWARD_PORT...", LogLevel.INFO)
+        log("Agent", "Pinging agent at 127.0.0.1:$LOCAL_FORWARD_PORT...", LogLevel.INFO)
         var response = sendToAgent("{\"cmd\":\"ping\"}", silent = true)
         
         if (response == null) {
-            viewModel.log("Agent", "Agent not responding. Attempting auto-setup...", LogLevel.INFO)
+            log("Agent", "Agent not responding. Attempting auto-setup...", LogLevel.INFO)
             setupMuttonAgent(forceInstall = false)
             response = sendToAgent("{\"cmd\":\"ping\"}")
         }
 
         if (response != null && response.isNotEmpty()) {
-            viewModel.log("Agent", "Response: $response", LogLevel.PASS)
+            log("Agent", "Response: $response", LogLevel.PASS)
         } else {
-            viewModel.log("Agent", "No response from agent. Setup might have failed.", LogLevel.WARN)
+            log("Agent", "No response from agent. Setup might have failed.", LogLevel.WARN)
         }
     }
 
     suspend fun cleanupMuttonAgent() {
-        if (!viewModel.uiState.value.adbIsValid) return
+        if (!adbState.value.isValid) return
         withContext(Dispatchers.IO) {
             try {
                 val serial = adb.deviceSerial
-                viewModel.log("Agent", "Force-stopping mutton agent...", LogLevel.INFO)
+                log("Agent", "Force-stopping mutton agent...", LogLevel.INFO)
                 adb.adb.execute(ShellCommandRequest("am force-stop org.example.mutton.test"), serial)
                 adb.adb.execute(ShellCommandRequest("am force-stop org.example.mutton"), serial)
-                viewModel.log("Agent", "Cleanup complete.", LogLevel.PASS)
+                log("Agent", "Cleanup complete.", LogLevel.PASS)
             } catch (e: Exception) {
-                viewModel.log("Agent", "Cleanup failed: ${e.message}", LogLevel.WARN)
+                log("Agent", "Cleanup failed: ${e.message}", LogLevel.WARN)
             }
         }
     }
 
     suspend fun dumpMuttonAgent(includeImage: Boolean = false, quality: Int = 2): String? {
         val jsonCmd = "{\"cmd\":\"get_ui_dump\",\"include_image\":$includeImage,\"image_quality\":$quality}"
-        viewModel.log("Agent", "Requesting UI dump from agent... (includeImage=$includeImage)", LogLevel.INFO)
+        log("Agent", "Requesting UI dump from agent... (includeImage=$includeImage)", LogLevel.INFO)
         var response = sendToAgent(jsonCmd, silent = true)
         
         // 1. Connection failed
         if (response == null) {
-            viewModel.log("Agent", "Agent not responding. Attempting auto-setup...", LogLevel.INFO)
+            log("Agent", "Agent not responding. Attempting auto-setup...", LogLevel.INFO)
             setupMuttonAgent(forceInstall = false)
             response = sendToAgent(jsonCmd)
         }
         
         // 2. Dead UIAutomation node (rootInActiveWindow null) -> Requires hard restart
         if (response != null && response.contains("\"status\":\"ng\"") && response.contains("rootInActiveWindow returned null")) {
-            viewModel.log("Agent", "UiAutomation state is broken (rootInActiveWindow null). Need hard restart.", LogLevel.ERROR)
+            log("Agent", "UiAutomation state is broken (rootInActiveWindow null). Need hard restart.", LogLevel.ERROR)
             cleanupMuttonAgent() // Kill the ghost process
             setupMuttonAgent(forceInstall = false) // Restart agent
             response = sendToAgent(jsonCmd) // Retry
         }
 
         if (response != null && response.isNotEmpty() && !response.contains("\"status\":\"ng\"")) {
-            viewModel.log("Agent", "Dump Success! Output size: ${response.length} chars", LogLevel.PASS)
-            //viewModel.log("Agent Dump", response, LogLevel.DEBUG)
+            log("Agent", "Dump Success! Output size: ${response.length} chars", LogLevel.PASS)
+            //log("Agent Dump", response, LogLevel.DEBUG)
         } else {
-            viewModel.log("Agent", "Dump failed or empty response.", LogLevel.WARN)
+            log("Agent", "Dump failed or empty response.", LogLevel.WARN)
         }
         return response
     }
 
     suspend fun executeAdbShell(command: String): String {
-        if (!viewModel.uiState.value.adbIsValid) return "Error: No device connected."
+        if (!adbState.value.isValid) return "Error: No device connected."
         return withContext(Dispatchers.IO) {
             try {
-                viewModel.log("ADB", "Executing shell: $command", LogLevel.INFO)
+                log("ADB", "Executing shell: $command", LogLevel.INFO)
                 val response = adb.adb.execute(ShellCommandRequest(command), adb.deviceSerial)
                 if (response.exitCode == 0) {
-                    viewModel.log("ADB", "Shell command succeeded.", LogLevel.PASS)
+                    log("ADB", "Shell command succeeded.", LogLevel.PASS)
                     response.output
                 } else {
-                    viewModel.log("ADB", "Shell error (exit ${response.exitCode}): ${response.output}", LogLevel.ERROR)
+                    log("ADB", "Shell error (exit ${response.exitCode}): ${response.output}", LogLevel.ERROR)
                     "Exit Code ${response.exitCode}:\n${response.output}"
                 }
             } catch (e: Exception) {
-                viewModel.log("ADB", "Shell execution failed: ${e.message}", LogLevel.ERROR)
+                log("ADB", "Shell execution failed: ${e.message}", LogLevel.ERROR)
                 "Error: ${e.message}"
             }
         }
@@ -658,10 +678,10 @@ class AdbObserver(private val viewModel: AppViewModel) {
 
     suspend fun tapCoordinate(x: Int, y: Int): String? {
         val jsonCmd = "{\"cmd\":\"tap\",\"x\":$x,\"y\":$y}"
-        viewModel.log("Agent", "Requesting tap at ($x, $y)", LogLevel.INFO)
+        log("Agent", "Requesting tap at ($x, $y)", LogLevel.INFO)
         val response = sendToAgent(jsonCmd, silent = true)
         if (response == null || response.contains("\"status\":\"error\"")) {
-            viewModel.log("Agent", "Tap failed: $response", LogLevel.ERROR)
+            log("Agent", "Tap failed: $response", LogLevel.ERROR)
             return null
         }
         return dumpMuttonAgent(includeImage = false)
@@ -669,27 +689,27 @@ class AdbObserver(private val viewModel: AppViewModel) {
 
     suspend fun swipe(startX: Int, startY: Int, endX: Int, endY: Int): String? {
         val jsonCmd = "{\"cmd\":\"swipe\",\"start_x\":$startX,\"start_y\":$startY,\"end_x\":$endX,\"end_y\":$endY}"
-        viewModel.log("Agent", "Requesting swipe from ($startX, $startY) to ($endX, $endY)", LogLevel.INFO)
+        log("Agent", "Requesting swipe from ($startX, $startY) to ($endX, $endY)", LogLevel.INFO)
         val response = sendToAgent(jsonCmd, silent = true)
         if (response == null || response.contains("\"status\":\"error\"")) {
-            viewModel.log("Agent", "Swipe failed: $response", LogLevel.ERROR)
+            log("Agent", "Swipe failed: $response", LogLevel.ERROR)
             return null
         }
         return dumpMuttonAgent(includeImage = false)
     }
 
     suspend fun pressKey(keycode: String): String? {
-        if (!viewModel.uiState.value.adbIsValid) return null
+        if (!adbState.value.isValid) return null
         return withContext(Dispatchers.IO) {
             try {
                 val serial = adb.deviceSerial
                 val keycodeArg = if (keycode.startsWith("KEYCODE_")) keycode else "KEYCODE_$keycode"
-                viewModel.log("Agent", "Pressing key via adb: $keycodeArg", LogLevel.INFO)
+                log("Agent", "Pressing key via adb: $keycodeArg", LogLevel.INFO)
                 adb.adb.execute(ShellCommandRequest("input keyevent $keycodeArg"), serial)
                 kotlinx.coroutines.delay(500)
                 dumpMuttonAgent(includeImage = false)
             } catch (e: Exception) {
-                viewModel.log("Agent", "Press key failed: ${e.message}", LogLevel.ERROR)
+                log("Agent", "Press key failed: ${e.message}", LogLevel.ERROR)
                 null
             }
         }
@@ -698,10 +718,10 @@ class AdbObserver(private val viewModel: AppViewModel) {
     suspend fun inputText(text: String, pressEnter: Boolean = true): String? {
         val escapedText = text.replace("\"", "\\\"").replace("\n", "\\n")
         val jsonCmd = "{\"cmd\":\"input_text\",\"text\":\"$escapedText\",\"press_enter\":$pressEnter}"
-        viewModel.log("Agent", "Requesting input_text: $escapedText (enter=$pressEnter)", LogLevel.INFO)
+        log("Agent", "Requesting input_text: $escapedText (enter=$pressEnter)", LogLevel.INFO)
         val response = sendToAgent(jsonCmd, silent = true)
         if (response == null || response.contains("\"status\":\"error\"")) {
-            viewModel.log("Agent", "Input text failed: $response", LogLevel.ERROR)
+            log("Agent", "Input text failed: $response", LogLevel.ERROR)
             return null
         }
         return dumpMuttonAgent(includeImage = false)
@@ -722,7 +742,7 @@ class AdbObserver(private val viewModel: AppViewModel) {
     }
 
     suspend fun clearLogcatBuffer(): String {
-        if (!viewModel.uiState.value.adbIsValid) return "Error: No device connected."
+        if (!adbState.value.isValid) return "Error: No device connected."
         return withContext(Dispatchers.IO) { 
             try {
                 adb.adb.execute(ShellCommandRequest("logcat -c"), adb.deviceSerial)
@@ -734,7 +754,7 @@ class AdbObserver(private val viewModel: AppViewModel) {
     }
 
     suspend fun getFilteredLogcat(tags: List<String>, level: String, grepPattern: String, maxLines: Int, process: String = ""): String {
-        if (!viewModel.uiState.value.adbIsValid) return "Error: No device connected."
+        if (!adbState.value.isValid) return "Error: No device connected."
         return withContext(Dispatchers.IO) {
             try {
                 val serial = adb.deviceSerial
@@ -778,14 +798,14 @@ class AdbObserver(private val viewModel: AppViewModel) {
                 
                 response.trim()
             } catch (e: Exception) {
-                viewModel.log("ADB", "Failed to get logcat: ${e.message}", LogLevel.ERROR)
+                log("ADB", "Failed to get logcat: ${e.message}", LogLevel.ERROR)
                 "Error: ${e.message}"
             }
         }
     }
 
     suspend fun getDeviceInfo(): String {
-        if (!viewModel.uiState.value.adbIsValid) return "{}"
+        if (!adbState.value.isValid) return "{}"
         return withContext(Dispatchers.IO) {
             try {
                 val serial = adb.deviceSerial
@@ -801,14 +821,14 @@ class AdbObserver(private val viewModel: AppViewModel) {
                 json.addProperty("screen_size", screenSize)
                 json.toString()
             } catch (e: Exception) {
-                viewModel.log("ADB", "Failed to get device info: ${e.message}", LogLevel.ERROR)
+                log("ADB", "Failed to get device info: ${e.message}", LogLevel.ERROR)
                 "{}"
             }
         }
     }
 
     suspend fun getDeviceState(): String {
-        if (!viewModel.uiState.value.adbIsValid) return "{}"
+        if (!adbState.value.isValid) return "{}"
         return withContext(Dispatchers.IO) {
             try {
                 val serial = adb.deviceSerial
@@ -830,14 +850,14 @@ class AdbObserver(private val viewModel: AppViewModel) {
                 json.addProperty("foreground_package", fgPackage)
                 json.toString()
             } catch (e: Exception) {
-                viewModel.log("ADB", "Failed to get device state: ${e.message}", LogLevel.ERROR)
+                log("ADB", "Failed to get device state: ${e.message}", LogLevel.ERROR)
                 "{}"
             }
         }
     }
 
     suspend fun openSettings(panel: String, packageName: String? = null): String? {
-        if (!viewModel.uiState.value.adbIsValid) return "Error: No device connected."
+        if (!adbState.value.isValid) return "Error: No device connected."
         return withContext(Dispatchers.IO) {
             try {
                 val serial = adb.deviceSerial
@@ -857,46 +877,46 @@ class AdbObserver(private val viewModel: AppViewModel) {
                     }
                     else -> return@withContext "Error: Unknown panel '$panel'."
                 }
-                viewModel.log("ADB", "Opening settings $panel...", LogLevel.INFO)
+                log("ADB", "Opening settings $panel...", LogLevel.INFO)
                 val response = adb.adb.execute(ShellCommandRequest(intentBuilder.toString()), serial)
                 if (response.exitCode == 0) {
                     delay(1000) // Wait for UI transition
                     dumpMuttonAgent(includeImage = false) // return the latest UI Dump
                 } else {
-                    viewModel.log("ADB", "Open settings failed: ${response.output}", LogLevel.ERROR)
+                    log("ADB", "Open settings failed: ${response.output}", LogLevel.ERROR)
                     "Error: ${response.output}"
                 }
             } catch (e: Exception) {
-                viewModel.log("ADB", "Failed to open settings: ${e.message}", LogLevel.ERROR)
+                log("ADB", "Failed to open settings: ${e.message}", LogLevel.ERROR)
                 "Error: ${e.message}"
             }
         }
     }
 
     suspend fun pushFile(hostPath: String, devicePath: String): String {
-        if (!viewModel.uiState.value.adbIsValid) return "Error: No device connected."
+        if (!adbState.value.isValid) return "Error: No device connected."
         return withContext(Dispatchers.IO) {
             try {
                 val serial = adb.deviceSerial
                 val localFile = File(hostPath)
                 if (!localFile.exists()) return@withContext "Error: Local file not found: $hostPath"
                 
-                viewModel.log("ADB", "Pushing $hostPath to $devicePath...", LogLevel.INFO)
+                log("ADB", "Pushing $hostPath to $devicePath...", LogLevel.INFO)
                 val pushChannel = adb.adb.execute(PushFileRequest(localFile, devicePath), this, serial)
                 for (progress in pushChannel) {
                     // consume progress
                 }
-                viewModel.log("ADB", "Push complete.", LogLevel.PASS)
+                log("ADB", "Push complete.", LogLevel.PASS)
                 "Success: File pushed to $devicePath"
             } catch (e: Exception) {
-                viewModel.log("ADB", "Push failed: ${e.message}", LogLevel.ERROR)
+                log("ADB", "Push failed: ${e.message}", LogLevel.ERROR)
                 "Error: ${e.message}"
             }
         }
     }
 
     suspend fun pullFile(devicePath: String, hostPath: String): String {
-        if (!viewModel.uiState.value.adbIsValid) return "Error: No device connected."
+        if (!adbState.value.isValid) return "Error: No device connected."
         return withContext(Dispatchers.IO) {
             try {
                 val serial = adb.deviceSerial
@@ -905,20 +925,20 @@ class AdbObserver(private val viewModel: AppViewModel) {
                     localFile.parentFile.mkdirs()
                 }
                 
-                viewModel.log("ADB", "Pulling $devicePath to $hostPath...", LogLevel.INFO)
+                log("ADB", "Pulling $devicePath to $hostPath...", LogLevel.INFO)
                 val channel = adb.adb.execute(PullFileRequest(devicePath, localFile), this, serial)
                 for (progress in channel) {}
-                viewModel.log("ADB", "Pull complete.", LogLevel.PASS)
+                log("ADB", "Pull complete.", LogLevel.PASS)
                 "Success: File pulled to $hostPath"
             } catch (e: Exception) {
-                viewModel.log("ADB", "Pull failed: ${e.message}", LogLevel.ERROR)
+                log("ADB", "Pull failed: ${e.message}", LogLevel.ERROR)
                 "Error: ${e.message}"
             }
         }
     }
 
     suspend fun installApp(apkPath: String, reinstall: Boolean = true): String {
-        if (!viewModel.uiState.value.adbIsValid) return "Error: No device connected."
+        if (!adbState.value.isValid) return "Error: No device connected."
         return withContext(Dispatchers.IO) {
             try {
                 val serial = adb.deviceSerial
@@ -926,12 +946,12 @@ class AdbObserver(private val viewModel: AppViewModel) {
                 if (!localApk.exists()) return@withContext "Error: APK not found: $apkPath"
                 
                 val remoteTmp = "/data/local/tmp/${localApk.name}"
-                viewModel.log("ADB", "Pushing APK to $remoteTmp...", LogLevel.INFO)
+                log("ADB", "Pushing APK to $remoteTmp...", LogLevel.INFO)
                 
                 val pushChannel = adb.adb.execute(PushFileRequest(localApk, remoteTmp), this, serial)
                 for (p in pushChannel) {}
                 
-                viewModel.log("ADB", "Installing APK...", LogLevel.INFO)
+                log("ADB", "Installing APK...", LogLevel.INFO)
                 val flags = if (reinstall) "-r " else ""
                 val installResult = adb.adb.execute(ShellCommandRequest("pm install $flags-t $remoteTmp"), serial)
                 
@@ -939,39 +959,48 @@ class AdbObserver(private val viewModel: AppViewModel) {
                 adb.adb.execute(ShellCommandRequest("rm $remoteTmp"), serial)
                 
                 if (installResult.output.contains("Success")) {
-                    viewModel.log("ADB", "Install complete: ${localApk.name}", LogLevel.PASS)
+                    log("ADB", "Install complete: ${localApk.name}", LogLevel.PASS)
                     "Success: Installed successfully"
                 } else {
-                    viewModel.log("ADB", "Install failed: ${installResult.output}", LogLevel.ERROR)
+                    log("ADB", "Install failed: ${installResult.output}", LogLevel.ERROR)
                     installResult.output
                 }
             } catch (e: Exception) {
-                viewModel.log("ADB", "Install exception: ${e.message}", LogLevel.ERROR)
+                log("ADB", "Install exception: ${e.message}", LogLevel.ERROR)
                 "Error: ${e.message}"
             }
         }
     }
 
     suspend fun uninstallApp(packageName: String, keepData: Boolean = false): String {
-        if (!viewModel.uiState.value.adbIsValid) return "Error: No device connected."
+        if (!adbState.value.isValid) return "Error: No device connected."
         return withContext(Dispatchers.IO) {
             try {
                 val serial = adb.deviceSerial
-                viewModel.log("ADB", "Uninstalling package: $packageName", LogLevel.INFO)
+                log("ADB", "Uninstalling package: $packageName", LogLevel.INFO)
                 val flags = if (keepData) "-k " else ""
                 val result = adb.adb.execute(ShellCommandRequest("pm uninstall $flags$packageName"), serial)
                 
                 if (result.output.contains("Success")) {
-                    viewModel.log("ADB", "Uninstall complete: $packageName", LogLevel.PASS)
+                    log("ADB", "Uninstall complete: $packageName", LogLevel.PASS)
                     "Success: Uninstalled successfully"
                 } else {
-                    viewModel.log("ADB", "Uninstall failed (or not installed): ${result.output}", LogLevel.WARN)
+                    log("ADB", "Uninstall failed (or not installed): ${result.output}", LogLevel.WARN)
                     result.output
                 }
             } catch (e: Exception) {
-                viewModel.log("ADB", "Uninstall exception: ${e.message}", LogLevel.ERROR)
+                log("ADB", "Uninstall exception: ${e.message}", LogLevel.ERROR)
                 "Error: ${e.message}"
             }
         }
     }
 }
+
+data class LogEvent(val tag: String, val message: String, val level: LogLevel)
+
+data class AdbState(
+    val isValid: Boolean = false,
+    val isUnauthorized: Boolean = false,
+    val deviceSerial: String = "",
+    val deviceInfo: String = ""
+)

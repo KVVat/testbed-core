@@ -26,6 +26,7 @@ Navigate to the extracted folder and execute the launcher script for your OS:
 
 * **Windows**: Double-click `testbed-windows.bat`.
 * **Linux (Ubuntu)**: Open a terminal and run `./testbed-ubuntu.sh` (make sure it has execute permissions: `chmod +x testbed-ubuntu.sh`).
+  * **Note for HiDPI/4K displays**: If the font or UI elements appear extremely small, you can scale them by prefixing the command with `GDK_SCALE`. For example: `GDK_SCALE=1.4 ./testbed-ubuntu.sh`.
 * **macOS**: Double-click the `TestbedCore.app` icon. *(If you see an "unidentified developer" warning, right-click the app, select **Open**, and click **Open** again).*
 
 > **Note**: On the first run, the script will automatically download the official Android SDK `platform-tools` (ADB/Fastboot) from Google and set them up in the `bin/` directory.
