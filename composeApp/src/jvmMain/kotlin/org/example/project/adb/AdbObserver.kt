@@ -42,6 +42,56 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.CoroutineScope
 
 class AdbObserver(private val scope: CoroutineScope) {
+ 
+    private enum class SuType {
+        STANDARD, // su -c "command"
+        UID_BASED, // su 0 command
+        ROOT_C,    // su root -c "command"
+        UNKNOWN
+    }
+    private var detectedSuType = SuType.UNKNOWN
+
+    private suspend fun executeWithSu(command: String, serial: String): com.malinskiy.adam.request.shell.v1.ShellCommandResult {
+        if (detectedSuType != SuType.UNKNOWN) {
+            val suCmd = buildSuCommand(detectedSuType, command)
+            return adb.adb.execute(ShellCommandRequest(suCmd), serial)
+        }
+        
+        val tryUid = adb.adb.execute(ShellCommandRequest("su 0 id"), serial)
+        if (tryUid.exitCode == 0 && tryUid.output.contains("uid=0")) {
+            detectedSuType = SuType.UID_BASED
+            val suCmd = buildSuCommand(detectedSuType, command)
+            return adb.adb.execute(ShellCommandRequest(suCmd), serial)
+        }
+        
+        val tryStd = adb.adb.execute(ShellCommandRequest("su -c id"), serial)
+        if (tryStd.exitCode == 0 && tryStd.output.contains("uid=0")) {
+            detectedSuType = SuType.STANDARD
+            val suCmd = buildSuCommand(detectedSuType, command)
+            return adb.adb.execute(ShellCommandRequest(suCmd), serial)
+        }
+        
+        val tryRootC = adb.adb.execute(ShellCommandRequest("su root -c id"), serial)
+        if (tryRootC.exitCode == 0 && tryRootC.output.contains("uid=0")) {
+            detectedSuType = SuType.ROOT_C
+            val suCmd = buildSuCommand(detectedSuType, command)
+            return adb.adb.execute(ShellCommandRequest(suCmd), serial)
+        }
+        
+        detectedSuType = SuType.STANDARD
+        val suCmd = buildSuCommand(detectedSuType, command)
+        return adb.adb.execute(ShellCommandRequest(suCmd), serial)
+    }
+
+    private fun buildSuCommand(type: SuType, command: String): String {
+        val escaped = command.replace("\"", "\\\"")
+        return when (type) {
+            SuType.UID_BASED -> "su 0 sh -c \"$escaped\""
+            SuType.STANDARD -> "su -c \"$escaped\""
+            SuType.ROOT_C -> "su root sh -c \"$escaped\""
+            else -> "su -c \"$escaped\""
+        }
+    }
 
     var adb: AdbDeviceRule = AdbDeviceRule()
     var adbProps: AdbProps = AdbProps()
@@ -893,45 +943,100 @@ class AdbObserver(private val scope: CoroutineScope) {
         }
     }
 
-    suspend fun pushFile(hostPath: String, devicePath: String): String {
+    suspend fun pushFile(hostPath: String, devicePath: String, useRoot: Boolean = false): String {
         if (!adbState.value.isValid) return "Error: No device connected."
         return withContext(Dispatchers.IO) {
+            val serial = adb.deviceSerial
+            val localFile = File(hostPath)
+            if (!localFile.exists()) return@withContext "Error: Local file not found: $hostPath"
+            
+            val tempRemoteDir = "/data/local/tmp/.smartpush"
+            val tempRemotePath = "$tempRemoteDir/temp_push"
+            
             try {
-                val serial = adb.deviceSerial
-                val localFile = File(hostPath)
-                if (!localFile.exists()) return@withContext "Error: Local file not found: $hostPath"
-                
-                log("ADB", "Pushing $hostPath to $devicePath...", LogLevel.INFO)
-                val pushChannel = adb.adb.execute(PushFileRequest(localFile, devicePath), this, serial)
-                for (progress in pushChannel) {
-                    // consume progress
+                val remoteDestPath = if (useRoot) {
+                    adb.adb.execute(ShellCommandRequest("mkdir -p $tempRemoteDir && chmod 777 $tempRemoteDir"), serial)
+                    tempRemotePath
+                } else {
+                    devicePath
                 }
+                
+                log("ADB", "Pushing $hostPath to $remoteDestPath...", LogLevel.INFO)
+                val pushChannel = adb.adb.execute(PushFileRequest(localFile, remoteDestPath), this, serial)
+                for (progress in pushChannel) {}
+                
+                if (useRoot) {
+                    log("ADB", "Moving temp file to protected location...", LogLevel.INFO)
+                    val escapedDest = devicePath.replace("'", "'\\''")
+                    val mvResult = executeWithSu("mv $tempRemotePath '$escapedDest' && chmod 644 '$escapedDest'", serial)
+                    
+                    adb.adb.execute(ShellCommandRequest("rm -rf $tempRemoteDir"), serial)
+                    
+                    if (mvResult.exitCode != 0) {
+                        return@withContext "Error: Failed to move file to destination: ${mvResult.output}"
+                    }
+                }
+                
                 log("ADB", "Push complete.", LogLevel.PASS)
                 "Success: File pushed to $devicePath"
             } catch (e: Exception) {
                 log("ADB", "Push failed: ${e.message}", LogLevel.ERROR)
+                if (useRoot) {
+                    try {
+                        adb.adb.execute(ShellCommandRequest("rm -rf $tempRemoteDir"), serial)
+                    } catch (_: Exception) {}
+                }
                 "Error: ${e.message}"
             }
         }
     }
 
-    suspend fun pullFile(devicePath: String, hostPath: String): String {
+    suspend fun pullFile(devicePath: String, hostPath: String, useRoot: Boolean = false): String {
         if (!adbState.value.isValid) return "Error: No device connected."
         return withContext(Dispatchers.IO) {
+            val serial = adb.deviceSerial
+            val localFile = File(hostPath)
+            if (!localFile.parentFile.exists()) {
+                localFile.parentFile.mkdirs()
+            }
+            
+            val tempRemoteDir = "/data/local/tmp/.smartpull"
+            val tempRemotePath = "$tempRemoteDir/temp_pull"
+            
             try {
-                val serial = adb.deviceSerial
-                val localFile = File(hostPath)
-                if (!localFile.parentFile.exists()) {
-                    localFile.parentFile.mkdirs()
+                val remoteSourcePath = if (useRoot) {
+                    log("ADB", "Copying protected file to temp location...", LogLevel.INFO)
+                    val escapedSrc = devicePath.replace("'", "'\\''")
+                    val cpResult = executeWithSu("mkdir -p $tempRemoteDir && chmod 777 $tempRemoteDir && cp '$escapedSrc' $tempRemotePath && chmod 666 $tempRemotePath", serial)
+                    if (cpResult.exitCode != 0) {
+                        val errMsg = "Error: Failed to copy file to temp directory (exit ${cpResult.exitCode}): ${cpResult.output.trim()}"
+                        log("ADB", errMsg, LogLevel.ERROR)
+                        return@withContext errMsg
+                    }
+                    tempRemotePath
+                } else {
+                    devicePath
                 }
                 
-                log("ADB", "Pulling $devicePath to $hostPath...", LogLevel.INFO)
-                val channel = adb.adb.execute(PullFileRequest(devicePath, localFile), this, serial)
+                log("ADB", "Pulling $remoteSourcePath to $hostPath...", LogLevel.INFO)
+                val channel = adb.adb.execute(PullFileRequest(remoteSourcePath, localFile), this, serial)
                 for (progress in channel) {}
+                
+                if (useRoot) {
+                    adb.adb.execute(ShellCommandRequest("rm -rf $tempRemoteDir"), serial)
+                }
+                
                 log("ADB", "Pull complete.", LogLevel.PASS)
                 "Success: File pulled to $hostPath"
             } catch (e: Exception) {
-                log("ADB", "Pull failed: ${e.message}", LogLevel.ERROR)
+                e.printStackTrace()
+                val trace = e.stackTraceToString()
+                log("ADB", "Pull failed: ${e.message}\n$trace", LogLevel.ERROR)
+                if (useRoot) {
+                    try {
+                        adb.adb.execute(ShellCommandRequest("rm -rf $tempRemoteDir"), serial)
+                    } catch (_: Exception) {}
+                }
                 "Error: ${e.message}"
             }
         }
@@ -993,6 +1098,276 @@ class AdbObserver(private val scope: CoroutineScope) {
                 "Error: ${e.message}"
             }
         }
+    }
+
+    suspend fun listDirectory(path: String, useRoot: Boolean = false): List<AdbFile> {
+        if (!adbState.value.isValid) return emptyList()
+        return withContext(Dispatchers.IO) {
+            try {
+                val serial = adb.deviceSerial
+                val escapedPath = path.replace("'", "'\\''")
+                
+                log("ADB", "Listing directory $path (root=$useRoot)...", LogLevel.INFO)
+                val response = if (useRoot) {
+                    executeWithSu("ls -al '$escapedPath'", serial)
+                } else {
+                    adb.adb.execute(ShellCommandRequest("ls -al '$escapedPath'"), serial)
+                }
+                
+                parseLsOutput(response.output)
+            } catch (e: Exception) {
+                log("ADB", "Error listing directory: ${e.message}", LogLevel.ERROR)
+                throw e
+            }
+        }
+    }
+
+    private fun parseLsOutput(output: String): List<AdbFile> {
+        val files = mutableListOf<AdbFile>()
+        val lines = output.lines()
+        
+        for (line in lines) {
+            val trimmed = line.trim()
+            if (trimmed.isBlank() || trimmed.startsWith("total")) continue
+            
+            val tokens = trimmed.split(Regex("""\s+"""))
+            if (tokens.size < 2) continue
+            
+            val permissions = tokens[0]
+            if (permissions.length != 10) continue
+            
+            val isDirectory = permissions.startsWith("d")
+            val isLink = permissions.startsWith("l")
+            
+            var size = 0L
+            var dateStr = ""
+            var fullName = ""
+            
+            if (tokens.contains("?")) {
+                if (tokens.size >= 7) {
+                    val nameTokens = tokens.subList(6, tokens.size)
+                    fullName = nameTokens.joinToString(" ")
+                } else {
+                    fullName = tokens.last()
+                }
+                dateStr = "?"
+                size = 0L
+            } else {
+                if (tokens.size < 8) continue
+                size = tokens.getOrNull(4)?.toLongOrNull() ?: 0L
+                dateStr = "${tokens.getOrNull(5) ?: ""} ${tokens.getOrNull(6) ?: ""}".trim()
+                val nameTokens = tokens.subList(7, tokens.size)
+                fullName = nameTokens.joinToString(" ")
+            }
+            
+            var name = fullName
+            var linkTarget: String? = null
+            
+            if (isLink && fullName.contains(" -> ")) {
+                val parts = fullName.split(" -> ")
+                name = parts[0]
+                linkTarget = parts.getOrNull(1)
+            }
+            
+            // Clean up escapes and quotes from ls output (e.g., X509\ Package.md -> X509 Package.md)
+            name = name.replace("\\ ", " ")
+            if (name.startsWith("'") && name.endsWith("'") && name.length >= 2) {
+                name = name.substring(1, name.length - 1)
+            }
+            
+            if (linkTarget != null) {
+                linkTarget = linkTarget.replace("\\ ", " ")
+                if (linkTarget.startsWith("'") && linkTarget.endsWith("'") && linkTarget.length >= 2) {
+                    linkTarget = linkTarget.substring(1, linkTarget.length - 1)
+                }
+            }
+            
+            if (name == "." || name == "..") continue
+            
+            files.add(
+                AdbFile(
+                    name = name,
+                    isDirectory = isDirectory,
+                    size = size,
+                    permissions = permissions,
+                    lastModified = dateStr,
+                    isSymbolicLink = isLink,
+                    linkTarget = linkTarget
+                )
+            )
+        }
+        
+        return files.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+    }
+
+    suspend fun getFilePreview(path: String, useRoot: Boolean = false): PreviewData {
+        if (!adbState.value.isValid) return PreviewData(false, "Error: No device connected.")
+        return withContext(Dispatchers.IO) {
+            try {
+                val serial = adb.deviceSerial
+                val escapedPath = path.replace("'", "'\\''")
+                
+                val fileCmd = if (useRoot) {
+                    executeWithSu("file '$escapedPath'", serial)
+                } else {
+                    adb.adb.execute(ShellCommandRequest("file '$escapedPath'"), serial)
+                }
+                val fileType = if (fileCmd.exitCode == 0 && fileCmd.output.isNotBlank()) {
+                    fileCmd.output.trim().substringAfter(":").trim()
+                } else null
+                
+                if (fileType != null && fileType.contains("symbolic link to", ignoreCase = true)) {
+                    return@withContext PreviewData(
+                        isBinary = false,
+                        textContent = "File: $path\nType: $fileType",
+                        hexDumpLines = null,
+                        fileType = fileType
+                    )
+                }
+                
+                val isText = (fileType != null && fileType.contains("text", ignoreCase = true)) || isTextFile(path)
+                
+                if (isText) {
+                    log("ADB", "Fetching text preview for $path...", LogLevel.INFO)
+                    val response = if (useRoot) {
+                        executeWithSu("head -c 4096 '$escapedPath'", serial)
+                    } else {
+                        adb.adb.execute(ShellCommandRequest("head -c 4096 '$escapedPath'"), serial)
+                    }
+                    PreviewData(
+                        isBinary = false,
+                        textContent = response.output,
+                        hexDumpLines = null,
+                        fileType = fileType
+                    )
+                } else {
+                    log("ADB", "Fetching hex preview via base64 for $path...", LogLevel.INFO)
+                    val response = if (useRoot) {
+                        executeWithSu("head -c 2048 '$escapedPath' | base64", serial)
+                    } else {
+                        adb.adb.execute(ShellCommandRequest("head -c 2048 '$escapedPath' | base64"), serial)
+                    }
+                    
+                    val cleanedOutput = response.output.trim()
+                    
+                    if (response.exitCode != 0 || cleanedOutput.isBlank()) {
+                        PreviewData(
+                            isBinary = true,
+                            textContent = "Preview unavailable (Failed to read binary file)",
+                            hexDumpLines = null,
+                            fileType = fileType
+                        )
+                    } else {
+                        val cleanedBase64 = cleanedOutput.replace(Regex("""\s+"""), "")
+                        val isBase64 = cleanedBase64.matches(Regex("""^[A-Za-z0-9+/]*={0,2}$"""))
+                        
+                        if (isBase64) {
+                            try {
+                                val bytes = java.util.Base64.getDecoder().decode(cleanedBase64)
+                                val hexString = formatHexDump(bytes)
+                                PreviewData(
+                                    isBinary = true,
+                                    textContent = null,
+                                    hexDumpLines = hexString.lines().filter { it.isNotBlank() },
+                                    fileType = fileType
+                                )
+                            } catch (ex: Exception) {
+                                PreviewData(
+                                    isBinary = true,
+                                    textContent = "Error decoding preview: ${ex.message}\nRaw output: ${cleanedOutput.take(500)}",
+                                    hexDumpLines = null,
+                                    fileType = fileType
+                                )
+                            }
+                        } else {
+                            PreviewData(
+                                isBinary = false,
+                                textContent = "Failed to preview file as binary.\nOutput/Error message:\n$cleanedOutput",
+                                hexDumpLines = null,
+                                fileType = fileType
+                            )
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                log("ADB", "Error fetching file preview: ${e.message}", LogLevel.ERROR)
+                PreviewData(
+                    isBinary = false,
+                    textContent = "Error loading preview: ${e.message}",
+                    hexDumpLines = null
+                )
+            }
+        }
+    }
+
+    private fun formatHexDump(bytes: ByteArray): String {
+        val builder = java.lang.StringBuilder()
+        for (i in bytes.indices step 16) {
+            val chunkLength = minOf(16, bytes.size - i)
+            val chunk = bytes.copyOfRange(i, i + chunkLength)
+            
+            // Offset (4 hex chars = 2 bytes)
+            builder.append(String.format("%04X  ", i))
+            
+            // Hex string (16 bytes)
+            for (j in 0 until 16) {
+                if (j < chunkLength) {
+                    builder.append(String.format("%02X ", chunk[j]))
+                } else {
+                    builder.append("   ")
+                }
+                if (j == 7) {
+                    builder.append(" ")
+                }
+            }
+            
+            builder.append(" |")
+            
+            // ASCII string
+            for (j in 0 until chunkLength) {
+                val c = chunk[j].toInt()
+                if (c in 32..126) {
+                    builder.append(c.toChar())
+                } else {
+                    builder.append('.')
+                }
+            }
+            builder.append("|\n")
+        }
+        return builder.toString()
+    }
+
+    suspend fun deleteFile(path: String, useRoot: Boolean = false): String {
+        if (!adbState.value.isValid) return "Error: No device connected."
+        return withContext(Dispatchers.IO) {
+            try {
+                val serial = adb.deviceSerial
+                val escapedPath = path.replace("'", "'\\''")
+                log("ADB", "Deleting file $path (root=$useRoot)...", LogLevel.INFO)
+                val response = if (useRoot) {
+                    executeWithSu("rm -f '$escapedPath'", serial)
+                } else {
+                    adb.adb.execute(ShellCommandRequest("rm -f '$escapedPath'"), serial)
+                }
+                
+                if (response.exitCode == 0) {
+                    log("ADB", "Deleted successfully.", LogLevel.PASS)
+                    "Success: File deleted."
+                } else {
+                    log("ADB", "Delete failed: ${response.output}", LogLevel.ERROR)
+                    "Error: Failed to delete: ${response.output.trim()}"
+                }
+            } catch (e: Exception) {
+                log("ADB", "Delete exception: ${e.message}", LogLevel.ERROR)
+                "Error: ${e.message}"
+            }
+        }
+    }
+
+    private fun isTextFile(path: String): Boolean {
+        val textExtensions = listOf(".txt", ".xml", ".json", ".log", ".prop", ".sh", ".conf", ".properties", ".yaml", ".yml", ".ini", ".csv", ".html", ".css", ".js", ".ts", ".kt", ".java", ".gradle")
+        val lower = path.lowercase()
+        return textExtensions.any { lower.endsWith(it) }
     }
 }
 

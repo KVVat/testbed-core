@@ -203,6 +203,10 @@ class MainViewModel : ViewModel(), KoinComponent {
         _bootMessages.forEach { (msg, level) -> log("BOOT", msg, level) }
         _bootMessages.clear()
         
+        JUnitBridge.baseDir = baseDir.absolutePath
+        JUnitBridge.resourceDir = File(baseDir, "resources").absolutePath
+        JUnitBridge.resultsDir = File(baseDir, "results").absolutePath
+
         extractDefaultAgentIfNeeded()
         loadSettings()
         

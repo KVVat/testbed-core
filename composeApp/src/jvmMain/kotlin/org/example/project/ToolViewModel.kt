@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.example.project.adb.AdbRepository
 import org.example.project.adb.LogEvent
+import org.example.project.adb.AdbFile
+import org.example.project.adb.PreviewData
 import org.example.project.model.UiNode
 import org.example.project.model.DumpResult
 import org.example.project.tools.LogRecorder
@@ -25,6 +27,24 @@ import java.util.Base64
 
 class ToolViewModel : ViewModel(), KoinComponent {
     private val adbRepository: AdbRepository by inject()
+
+    // File Explorer Pin/Bookmark properties & operations
+    private val defaultBookmarks = listOf(
+        "/data/local/tmp",
+        "/data/system",
+        "/sdcard",
+        "/data/data"
+    )
+
+    private var isInitialPathLoaded = false
+
+    private val _pinnedPaths = MutableStateFlow<List<String>>(emptyList())
+    val pinnedPaths = _pinnedPaths.asStateFlow()
+
+    private val settingsFile: File get() = File(baseDir, "app_settings.properties")
+
+    private val _splitPercent = MutableStateFlow(0.6f)
+    val splitPercent = _splitPercent.asStateFlow()
 
     private val _isToolWindowOpen = MutableStateFlow(false)
     val isToolWindowOpen = _isToolWindowOpen.asStateFlow()
@@ -52,12 +72,13 @@ class ToolViewModel : ViewModel(), KoinComponent {
     private val _uiDumpScreenHeight = MutableStateFlow(2400)
     val uiDumpScreenHeight = _uiDumpScreenHeight.asStateFlow()
 
-    private val baseDir = if (JUnitBridge.baseDir.isNotBlank()) File(JUnitBridge.baseDir) else File(".")
-    private val logRecorder = LogRecorder(baseFileName = File(baseDir, "logcat.log").absolutePath)
+    private val baseDir: File get() = if (JUnitBridge.baseDir.isNotBlank()) File(JUnitBridge.baseDir) else File(".")
+    private val logRecorder: LogRecorder get() = LogRecorder(baseFileName = File(baseDir, "logcat.log").absolutePath)
 
     var logcatBufferSize: Int = 30000
 
     init {
+        loadPinnedPaths()
         viewModelScope.launch {
             adbRepository.logcatLines.collect { line ->
                 onLogcatReceived(line)
@@ -72,6 +93,17 @@ class ToolViewModel : ViewModel(), KoinComponent {
             adbRepository.adbState.collect { state ->
                 if (state.isValid && _isToolWindowOpen.value) {
                     startLogcat()
+                    if (!isInitialPathLoaded) {
+                        val lastPin = _pinnedPaths.value.firstOrNull() ?: "/"
+                        if (lastPin != "/") {
+                            navigateTo(lastPin)
+                        } else {
+                            refreshFileList()
+                        }
+                        isInitialPathLoaded = true
+                    } else {
+                        refreshFileList()
+                    }
                 } else if (!state.isValid) {
                     stopLogcat()
                 }
@@ -86,6 +118,7 @@ class ToolViewModel : ViewModel(), KoinComponent {
     fun openWindow() {
         _isToolWindowOpen.value = true
         startLogcat()
+        refreshFileList()
     }
 
     fun closeWindow() {
@@ -196,8 +229,336 @@ class ToolViewModel : ViewModel(), KoinComponent {
         }
     }
 
+    // File Explorer properties
+    private val _currentPath = MutableStateFlow("/")
+    val currentPath = _currentPath.asStateFlow()
+
+    private val _fileList = MutableStateFlow<List<AdbFile>>(emptyList())
+    val fileList = _fileList.asStateFlow()
+
+    private val _selectedFile = MutableStateFlow<AdbFile?>(null)
+    val selectedFile = _selectedFile.asStateFlow()
+
+    private val _previewContent = MutableStateFlow<PreviewData?>(null)
+    val previewContent = _previewContent.asStateFlow()
+
+    private val _isTransferring = MutableStateFlow(false)
+    val isTransferring = _isTransferring.asStateFlow()
+
+    fun setTransferring(value: Boolean) {
+        _isTransferring.value = value
+    }
+
+    private val _isRootMode = MutableStateFlow(true)
+    val isRootMode = _isRootMode.asStateFlow()
+
+    private var lastValidPath = "/"
+
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage = _errorMessage.asStateFlow()
+
+    fun clearErrorMessage() {
+        _errorMessage.value = null
+    }
+
+    fun refreshFileList() {
+        viewModelScope.launch {
+            try {
+                val files = adbRepository.listDirectory(_currentPath.value, _isRootMode.value)
+                _fileList.value = files
+                lastValidPath = _currentPath.value
+                _errorMessage.value = null
+            } catch (e: Exception) {
+                _errorMessage.value = "Permission Denied or Failed to access: ${_currentPath.value}\n${e.message}"
+                _currentPath.value = lastValidPath
+                try {
+                    _fileList.value = adbRepository.listDirectory(lastValidPath, _isRootMode.value)
+                } catch (_: Exception) {
+                    _currentPath.value = "/"
+                    lastValidPath = "/"
+                    try {
+                        _fileList.value = adbRepository.listDirectory("/", _isRootMode.value)
+                    } catch (_: Exception) {
+                        _fileList.value = emptyList()
+                    }
+                }
+            }
+        }
+    }
+
+    fun navigateTo(path: String) {
+        val normalized = if (path.startsWith("/")) path else "/$path"
+        _currentPath.value = normalized
+        selectFile(null)
+        promoteBookmarkToFirst(normalized)
+        refreshFileList()
+    }
+
+    fun selectFile(file: AdbFile?) {
+        _selectedFile.value = file
+        _previewContent.value = null
+        cleanupTempEditDir()
+        if (file != null && !file.isDirectory && file.size > 0) {
+            loadPreview(file.name)
+        }
+    }
+
+    private val _localEditFilePath = MutableStateFlow<String?>(null)
+    val localEditFilePath = _localEditFilePath.asStateFlow()
+
+    private var currentTempEditDir: File? = null
+
+    private fun loadPreview(fileName: String) {
+        viewModelScope.launch {
+            val current = _currentPath.value
+            val fullPath = if (current.endsWith("/")) "$current$fileName" else "$current/$fileName"
+            
+            cleanupTempEditDir()
+            
+            try {
+                val preview = adbRepository.getFilePreview(fullPath, _isRootMode.value)
+                
+                val selected = _selectedFile.value
+                val isEditableText = selected != null && selected.size <= 4096 && isTextFile(fileName)
+                
+                if (isEditableText) {
+                    val tmpParent = File(System.getProperty("java.io.tmpdir"))
+                    val tempDir = File(tmpParent, ".smartedit_${System.currentTimeMillis()}_${(1000..9999).random()}")
+                    tempDir.mkdirs()
+                    currentTempEditDir = tempDir
+                    
+                    val localFile = File(tempDir, fileName)
+                    val pullResult = adbRepository.pullFile(fullPath, localFile.absolutePath, _isRootMode.value)
+                    
+                    if (pullResult.startsWith("Success")) {
+                        val fileContent = localFile.readText(Charsets.UTF_8)
+                        _localEditFilePath.value = localFile.absolutePath
+                        
+                        _previewContent.value = PreviewData(
+                            isBinary = false,
+                            textContent = fileContent,
+                            hexDumpLines = null,
+                            fileType = preview.fileType
+                        )
+                    } else {
+                        _previewContent.value = PreviewData(
+                            isBinary = false,
+                            textContent = "Error: Failed to pull file for editing: $pullResult",
+                            hexDumpLines = null,
+                            fileType = preview.fileType
+                        )
+                    }
+                } else {
+                    _previewContent.value = preview
+                }
+            } catch (e: Exception) {
+                _previewContent.value = PreviewData(false, "Failed to load preview: ${e.message}")
+            }
+        }
+    }
+
+    fun cleanupTempEditDir() {
+        _localEditFilePath.value = null
+        currentTempEditDir?.let { dir ->
+            if (dir.exists()) {
+                dir.deleteRecursively()
+            }
+        }
+        currentTempEditDir = null
+    }
+
+    fun toggleRootMode() {
+        _isRootMode.value = !_isRootMode.value
+        refreshFileList()
+    }
+
+    fun pullFile(deviceFilePath: String, hostDestinationPath: String, onComplete: (String) -> Unit = {}) {
+        viewModelScope.launch {
+            _isTransferring.value = true
+            try {
+                val result = adbRepository.pullFile(deviceFilePath, hostDestinationPath, _isRootMode.value)
+                onComplete(result)
+            } catch (e: Exception) {
+                onComplete("Error: ${e.message}")
+            } finally {
+                _isTransferring.value = false
+            }
+        }
+    }
+
+    fun pushFile(hostFilePath: String, deviceDestinationPath: String, onComplete: (String) -> Unit = {}) {
+        viewModelScope.launch {
+            _isTransferring.value = true
+            try {
+                val result = adbRepository.pushFile(hostFilePath, deviceDestinationPath, _isRootMode.value)
+                onComplete(result)
+                refreshFileList()
+            } catch (e: Exception) {
+                onComplete("Error: ${e.message}")
+            } finally {
+                _isTransferring.value = false
+            }
+        }
+    }
+
+    fun navigateUp() {
+        val path = _currentPath.value
+        if (path == "/") return
+        val normalized = if (path.endsWith("/")) path.dropLast(1) else path
+        val lastSlash = normalized.lastIndexOf('/')
+        val parent = if (lastSlash <= 0) "/" else normalized.substring(0, lastSlash)
+        navigateTo(parent)
+    }
+
+    private fun log(tag: String, message: String, level: LogLevel = LogLevel.INFO) {
+        println("[$tag] ${level.name}: $message")
+    }
+
+    fun promoteBookmarkToFirst(path: String) {
+        val list = _pinnedPaths.value.toMutableList()
+        if (list.contains(path)) {
+            list.remove(path)
+            list.add(0, path)
+            _pinnedPaths.value = list
+            savePinnedPaths()
+        }
+    }
+
+    fun togglePinCurrentPath() {
+        val current = _currentPath.value
+        val list = _pinnedPaths.value.toMutableList()
+        if (list.contains(current)) {
+            list.remove(current)
+        } else {
+            list.add(0, current)
+            while (list.size > 5) {
+                list.removeAt(list.size - 1)
+            }
+        }
+        _pinnedPaths.value = list
+        savePinnedPaths()
+    }
+
+    private fun savePinnedPaths() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val props = java.util.Properties()
+                if (settingsFile.exists()) {
+                    props.load(settingsFile.inputStream())
+                }
+                props.setProperty("fileExplorerBookmarks", _pinnedPaths.value.joinToString(","))
+                props.store(settingsFile.outputStream(), "App Settings")
+                log("SYSTEM", "Bookmarks saved to ${settingsFile.absolutePath}: ${_pinnedPaths.value}", LogLevel.INFO)
+            } catch (e: Exception) {
+                log("SYSTEM", "Failed to save bookmarks: ${e.message}", LogLevel.ERROR)
+            }
+        }
+    }
+
+    fun loadPinnedPaths() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val path = settingsFile.absolutePath
+                if (settingsFile.exists()) {
+                    val props = java.util.Properties().apply { load(settingsFile.inputStream()) }
+                    val bookmarkStr = props.getProperty("fileExplorerBookmarks")
+                    val splitStr = props.getProperty("fileExplorerSplitPercent")
+                    
+                    val list = if (!bookmarkStr.isNullOrBlank()) {
+                        bookmarkStr.split(",")
+                            .map { it.trim() }
+                            .filter { it.isNotBlank() }
+                    } else {
+                        defaultBookmarks
+                    }
+                    _pinnedPaths.value = list.take(5)
+                    
+                    _splitPercent.value = splitStr?.toFloatOrNull()?.coerceIn(0.1f, 0.9f) ?: 0.6f
+                    
+                    log("SYSTEM", "Bookmarks loaded successfully from $path: ${_pinnedPaths.value}, Split: ${_splitPercent.value}", LogLevel.INFO)
+                } else {
+                    _pinnedPaths.value = defaultBookmarks.take(5)
+                    _splitPercent.value = 0.6f
+                    log("SYSTEM", "Settings file not found at $path. Creating default bookmarks: ${_pinnedPaths.value}", LogLevel.INFO)
+                    savePinnedPaths()
+                }
+            } catch (e: Exception) {
+                log("SYSTEM", "Failed to load bookmarks: ${e.message}", LogLevel.ERROR)
+                _pinnedPaths.value = defaultBookmarks.take(5)
+            }
+        }
+    }
+
+    fun updateSplitPercent(percent: Float) {
+        val clamped = percent.coerceIn(0.1f, 0.9f)
+        _splitPercent.value = clamped
+        saveSplitPercent()
+    }
+
+    private fun saveSplitPercent() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val props = java.util.Properties()
+                if (settingsFile.exists()) {
+                    props.load(settingsFile.inputStream())
+                }
+                props.setProperty("fileExplorerSplitPercent", _splitPercent.value.toString())
+                props.store(settingsFile.outputStream(), "App Settings")
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun deleteFile(fileName: String, onComplete: (String) -> Unit = {}) {
+        viewModelScope.launch {
+            val current = _currentPath.value
+            val fullPath = if (current.endsWith("/")) "$current$fileName" else "$current/$fileName"
+            _isTransferring.value = true
+            try {
+                val result = adbRepository.deleteFile(fullPath, _isRootMode.value)
+                onComplete(result)
+                if (result.startsWith("Success")) {
+                    refreshFileList()
+                }
+            } catch (e: Exception) {
+                onComplete("Error: ${e.message}")
+            } finally {
+                _isTransferring.value = false
+            }
+        }
+    }
+
+    fun saveEditedFile(newText: String, onComplete: (String) -> Unit = {}) {
+        val localPath = _localEditFilePath.value
+        val selected = _selectedFile.value
+        if (localPath == null || selected == null) {
+            onComplete("Error: No local temporary file to save.")
+            return
+        }
+        
+        viewModelScope.launch {
+            _isTransferring.value = true
+            try {
+                val localFile = File(localPath)
+                localFile.writeText(newText, Charsets.UTF_8)
+                
+                val current = _currentPath.value
+                val deviceFilePath = if (current.endsWith("/")) "$current${selected.name}" else "$current/${selected.name}"
+                
+                val result = adbRepository.pushFile(localPath, deviceFilePath, _isRootMode.value)
+                onComplete(result)
+                
+                loadPreview(selected.name)
+            } catch (e: Exception) {
+                onComplete("Error saving: ${e.message}")
+            } finally {
+                _isTransferring.value = false
+            }
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
+        cleanupTempEditDir()
         logRecorder.close()
     }
 }

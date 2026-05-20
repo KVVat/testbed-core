@@ -1,6 +1,8 @@
 package org.example.project
 
+import java.io.File
 import org.example.project.tools.LogcatFilter
+import kotlinx.coroutines.launch
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -60,6 +62,10 @@ fun ToolWindow(viewModel: ToolViewModel, onCloseRequest: () -> Unit) {
     val uiDumpScreenWidth by viewModel.uiDumpScreenWidth.collectAsState()
     val uiDumpScreenHeight by viewModel.uiDumpScreenHeight.collectAsState()
     val logcatBufferSize = viewModel.logcatBufferSize
+    val isRootMode by viewModel.isRootMode.collectAsState()
+
+    val coroutineScope = rememberCoroutineScope()
+    var isWindowDialogOpen by remember { mutableStateOf(false) }
 
     // UI状態
     var isCompactMode by remember { mutableStateOf(false) } // Compact vs Standard
@@ -92,7 +98,7 @@ fun ToolWindow(viewModel: ToolViewModel, onCloseRequest: () -> Unit) {
     Window(
         onCloseRequest = onCloseRequest, 
         state = windowState, 
-        title = "Tool Window",
+        title = "Tool Box Window",
         undecorated = true,
         transparent = !isWindows
     ) {
@@ -114,7 +120,7 @@ fun ToolWindow(viewModel: ToolViewModel, onCloseRequest: () -> Unit) {
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                "Tool Window",
+                                "Tool Box Window",
                                 color = Color.LightGray,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold
@@ -222,7 +228,7 @@ fun ToolWindow(viewModel: ToolViewModel, onCloseRequest: () -> Unit) {
                             tint = Color.Gray,
                             icon = Icons.Default.ContentCopy
                         )
-                    } else {
+                    } else if (selectedTab == 1) {
                         // UI Inspector Tools
                         TooltipIconButton(
                             icon = Icons.Default.CellTower,
@@ -236,6 +242,41 @@ fun ToolWindow(viewModel: ToolViewModel, onCloseRequest: () -> Unit) {
                             tooltip = "Dump UI Tree",
                             tint = Color(0xFFFFC66D),
                             onClick = { viewModel.dumpMuttonAgent() }
+                        )
+                    } else {
+                        // File Explorer Tools
+                        TooltipIconButton(
+                            icon = Icons.Default.UploadFile,
+                            tooltip = "Push File to Device",
+                            tint = Color(0xFF569CD6),
+                            onClick = {
+                                if (isWindowDialogOpen) return@TooltipIconButton
+                                isWindowDialogOpen = true
+                                coroutineScope.launch {
+                                    val hostPath = showOpenFileDialogSafe("Select File to Push")
+                                    if (hostPath != null) {
+                                        val fileName = File(hostPath).name
+                                        val current = viewModel.currentPath.value
+                                        val destPath = if (current.endsWith("/")) "$current$fileName" else "$current/$fileName"
+                                        viewModel.pushFile(hostPath, destPath)
+                                    }
+                                    isWindowDialogOpen = false
+                                }
+                            }
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        TooltipIconButton(
+                            icon = if (isRootMode) Icons.Default.LockOpen else Icons.Default.Lock,
+                            tooltip = if (isRootMode) "Exit Root Mode" else "Enter Root Mode",
+                            tint = if (isRootMode) Color(0xFFFF6B68) else Color.Gray,
+                            onClick = { viewModel.toggleRootMode() }
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        TooltipIconButton(
+                            icon = Icons.Default.Refresh,
+                            tooltip = "Refresh Directory",
+                            tint = Color.White,
+                            onClick = { viewModel.refreshFileList() }
                         )
                     }
 
@@ -270,12 +311,20 @@ fun ToolWindow(viewModel: ToolViewModel, onCloseRequest: () -> Unit) {
                         Tab(
                             selected = selectedTab == 0,
                             onClick = { viewModel.setTab(0) },
+                            icon = { Icon(Icons.AutoMirrored.Filled.Notes, contentDescription = null) },
                             text = { Text("Logcat") }
                         )
                         Tab(
                             selected = selectedTab == 1,
                             onClick = { viewModel.setTab(1) },
+                            icon = { Icon(Icons.Default.AccountTree, contentDescription = null) },
                             text = { Text("UI Inspector") }
+                        )
+                        Tab(
+                            selected = selectedTab == 2,
+                            onClick = { viewModel.setTab(2) },
+                            icon = { Icon(Icons.Default.FolderOpen, contentDescription = null) },
+                            text = { Text("File Explorer") }
                         )
                     }
 
@@ -334,7 +383,7 @@ fun ToolWindow(viewModel: ToolViewModel, onCloseRequest: () -> Unit) {
                             maxCount = logcatBufferSize,
                             filteredCount = filteredLogs.size
                         )
-                    } else {
+                    } else if (selectedTab == 1) {
                         // UI Inspector ツール
                         UiInspectorPane(
                             rootNode = uiDumpRoot,
@@ -342,6 +391,9 @@ fun ToolWindow(viewModel: ToolViewModel, onCloseRequest: () -> Unit) {
                             screenWidth = uiDumpScreenWidth,
                             screenHeight = uiDumpScreenHeight
                         )
+                    } else {
+                        // File Explorer Pane
+                        FileExplorerPane(viewModel)
                     }
                 } // end right column
             } // end Row

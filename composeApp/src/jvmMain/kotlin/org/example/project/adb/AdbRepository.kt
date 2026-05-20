@@ -48,8 +48,11 @@ class AdbRepository {
     suspend fun getDeviceInfo() = adbObserver.getDeviceInfo()
     suspend fun getDeviceState() = adbObserver.getDeviceState()
     suspend fun openSettings(panel: String, packageName: String? = null) = adbObserver.openSettings(panel, packageName)
-    suspend fun pushFile(hostPath: String, devicePath: String) = adbObserver.pushFile(hostPath, devicePath)
-    suspend fun pullFile(devicePath: String, hostPath: String) = adbObserver.pullFile(devicePath, hostPath)
+    suspend fun pushFile(hostPath: String, devicePath: String, useRoot: Boolean = false) = adbObserver.pushFile(hostPath, devicePath, useRoot)
+    suspend fun pullFile(devicePath: String, hostPath: String, useRoot: Boolean = false) = adbObserver.pullFile(devicePath, hostPath, useRoot)
+    suspend fun listDirectory(path: String, useRoot: Boolean = false) = adbObserver.listDirectory(path, useRoot)
+    suspend fun getFilePreview(path: String, useRoot: Boolean = false) = adbObserver.getFilePreview(path, useRoot)
+    suspend fun deleteFile(path: String, useRoot: Boolean = false) = adbObserver.deleteFile(path, useRoot)
     suspend fun installApp(apkPath: String, reinstall: Boolean = true) = adbObserver.installApp(apkPath, reinstall)
     suspend fun uninstallApp(packageName: String, keepData: Boolean = false) = adbObserver.uninstallApp(packageName, keepData)
 }

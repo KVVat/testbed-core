@@ -554,11 +554,11 @@ fun TopControlBar(
             }
         },
         actions = {
-            // 右側: Open Logcat
+            // 右側: Open ToolBox
             TextButton(onClick = onLogcatClick) {
-                Icon(Icons.Default.Visibility, contentDescription = "Open Logcat", tint = Color.White)
+                Icon(Icons.Default.HomeRepairService, contentDescription = "Open ToolBox", tint = Color.White)
                 Spacer(Modifier.width(4.dp))
-                Text("Open Logcat", color = Color.White)
+                Text("Open ToolBox", color = Color.White)
             }
         }
     )
@@ -806,7 +806,7 @@ fun SettingsDialog(
                                     onCheckedChange = { autoOpen = it },
                                     colors = CheckboxDefaults.colors(checkedColor = Color(0xFF569CD6))
                                 )
-                                Text("Open Logcat window on startup", color = Color.White, fontSize = 14.sp)
+                                Text("Open ToolBox window on startup", color = Color.White, fontSize = 14.sp)
                             }
 
                             Spacer(Modifier.height(16.dp))

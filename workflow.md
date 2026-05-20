@@ -103,3 +103,63 @@
 - Repackage(手動): `build_run_id` が必要
 - Release(手動): `package_run_id` が必要
 - Repackage(自動起動): `build_run_id` は不要
+
+
+Trajectory ID: 5e50969e-0135-455a-9548-fbfe1a0e09e0
+Error: agent executor error: failed to load template for section communication_style (filename=communication_style, isInternal=false): template: communication_style:6:19: executing "communication_style" at <.CascadeConfig.GetSupportsLatexRendering>: can't evaluate field GetSupportsLatexRendering in type *cortex_go_proto.CascadeConfig
+(1) attached stack trace
+  -- stack trace:
+  | google3/third_party/gemini_coder/framework/executor/agentexecutor/agentexecutor.(*AgentExecutor).Run
+  | 	third_party/gemini_coder/framework/executor/agentexecutor/agentexecutor.go:325
+  | google3/third_party/jetski/cortex/cortex.(*CascadeManager).executeOne.func1
+  | 	third_party/jetski/cortex/cascade_manager.go:1575
+  | google3/third_party/jetski/cortex/cortex.(*CascadeManager).executeOne.func2
+  | 	third_party/jetski/cortex/cascade_manager.go:1585
+  | google3/third_party/jetski/cortex/utils/background.(*Pool).Go.func2
+  | 	third_party/jetski/cortex/utils/background.go:121
+  | google3/go/context/detach.Go.func1
+  | 	go/context/detach.go:250
+Wraps: (2) agent executor error
+Wraps: (3) attached stack trace
+  -- stack trace:
+  | google3/third_party/gemini_coder/framework/generator/generator.(*requestBuilder).buildRequest
+  | 	third_party/gemini_coder/framework/generator/request_builder.go:90
+  | [...repeated from below...]
+Wraps: (4) attached stack trace
+  -- stack trace:
+  | google3/third_party/jetski/cortex/mixins/mixins.(*PromptBuilder).resolveContent
+  | 	third_party/jetski/cortex/mixins/prompt_builder.go:343
+  | google3/third_party/jetski/cortex/mixins/mixins.(*PromptBuilder).processContent
+  | 	third_party/jetski/cortex/mixins/prompt_builder.go:309
+  | google3/third_party/jetski/cortex/mixins/mixins.(*PromptBuilder).Build
+  | 	third_party/jetski/cortex/mixins/prompt_builder.go:118
+  | google3/third_party/jetski/cortex/mixins/mixins.(*CascadeConversationalMixin).GetSystemPrompt
+  | 	third_party/jetski/cortex/mixins/cascade_conversational_mixin.go:114
+  | google3/third_party/gemini_coder/framework/generator/generator.(*requestBuilder).buildRequest
+  | 	third_party/gemini_coder/framework/generator/request_builder.go:88
+  | google3/third_party/gemini_coder/framework/generator/generator.(*PlannerGenerator).generateWithAPIRetry
+  | 	third_party/gemini_coder/framework/generator/planner_generator.go:283
+  | google3/third_party/gemini_coder/framework/generator/generator.(*PlannerGenerator).generateWithModelOutputRetry
+  | 	third_party/gemini_coder/framework/generator/planner_generator.go:154
+  | google3/third_party/gemini_coder/framework/generator/generator.(*PlannerGenerator).Generate
+  | 	third_party/gemini_coder/framework/generator/planner_generator.go:90
+  | google3/third_party/gemini_coder/framework/executor/executor.(*Executor).executeLoop
+  | 	third_party/gemini_coder/framework/executor/executor.go:402
+  | google3/third_party/gemini_coder/framework/executor/executor.(*Executor).Execute
+  | 	third_party/gemini_coder/framework/executor/executor.go:315
+  | google3/third_party/gemini_coder/framework/executor/agentexecutor/agentexecutor.(*AgentExecutor).Run
+  | 	third_party/gemini_coder/framework/executor/agentexecutor/agentexecutor.go:300
+  | google3/third_party/jetski/cortex/cortex.(*CascadeManager).executeOne.func1
+  | 	third_party/jetski/cortex/cascade_manager.go:1575
+  | google3/third_party/jetski/cortex/cortex.(*CascadeManager).executeOne.func2
+  | 	third_party/jetski/cortex/cascade_manager.go:1585
+  | google3/third_party/jetski/cortex/utils/background.(*Pool).Go.func2
+  | 	third_party/jetski/cortex/utils/background.go:121
+  | google3/go/context/detach.Go.func1
+  | 	go/context/detach.go:250
+  | runtime.goexit
+  | 	third_party/go/gc/src/runtime/asm_arm64.s:1424
+Wraps: (5) failed to load template for section communication_style (filename=communication_style, isInternal=false)
+Wraps: (6)
+Wraps: (7) template: communication_style:6:19: executing "communication_style" at <.CascadeConfig.GetSupportsLatexRendering>: can't evaluate field GetSupportsLatexRendering in type *cortex_go_proto.CascadeConfig
+Error types: (1) *withstack.withStack (2) *errutil.withPrefix (3) *withstack.withStack (4) *withstack.withStack (5) *errutil.withPrefix (6) template.ExecError (7) *errors.errorString
