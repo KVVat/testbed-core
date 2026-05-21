@@ -48,4 +48,4 @@ composeApp/screenshots
 
 results/
 xml-patches/
-composeApp/appsettings.properties
+composeApp/app_settings.properties
