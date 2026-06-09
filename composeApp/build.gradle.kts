@@ -47,6 +47,7 @@ kotlin {
             implementation(libs.gson)
             implementation(libs.koin.core)
             implementation(libs.koin.compose)
+            implementation(libs.jetlime)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)

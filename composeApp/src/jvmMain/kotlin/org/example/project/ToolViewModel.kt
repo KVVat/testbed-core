@@ -15,6 +15,9 @@ import org.example.project.adb.AdbFile
 import org.example.project.adb.PreviewData
 import org.example.project.model.UiNode
 import org.example.project.model.DumpResult
+import org.example.project.model.TimelineItem
+import org.example.project.model.Snapshot
+import org.example.project.model.ActionDetails
 import org.example.project.tools.LogRecorder
 import org.example.project.tools.LogcatParser
 import org.example.project.tools.ProcessNameResolver
@@ -24,6 +27,7 @@ import java.io.File
 import com.google.gson.Gson
 import org.jetbrains.skia.Image
 import java.util.Base64
+
 
 class ToolViewModel : ViewModel(), KoinComponent {
     private val adbRepository: AdbRepository by inject()
@@ -72,6 +76,18 @@ class ToolViewModel : ViewModel(), KoinComponent {
     private val _uiDumpScreenHeight = MutableStateFlow(2400)
     val uiDumpScreenHeight = _uiDumpScreenHeight.asStateFlow()
 
+    // Timeline Inspector properties
+    private val _timelineItems = MutableStateFlow<List<TimelineItem>>(emptyList())
+    val timelineItems = _timelineItems.asStateFlow()
+
+    private val _selectedTimelineIndex = MutableStateFlow(-1)
+    val selectedTimelineIndex = _selectedTimelineIndex.asStateFlow()
+
+    private var uiPollingJob: kotlinx.coroutines.Job? = null
+    private var lastRawScreenshotBase64: String = ""
+
+
+
     private val baseDir: File get() = if (JUnitBridge.baseDir.isNotBlank()) File(JUnitBridge.baseDir) else File(".")
     private val logRecorder: LogRecorder get() = LogRecorder(baseFileName = File(baseDir, "logcat.log").absolutePath)
 
@@ -113,18 +129,45 @@ class ToolViewModel : ViewModel(), KoinComponent {
 
     fun setTab(index: Int) {
         _selectedTab.value = index
+        if (index == 1) {
+            startUiPolling()
+        } else {
+            stopUiPolling()
+        }
     }
 
     fun openWindow() {
         _isToolWindowOpen.value = true
         startLogcat()
         refreshFileList()
+        if (_selectedTab.value == 1) {
+            startUiPolling()
+        }
     }
 
     fun closeWindow() {
         _isToolWindowOpen.value = false
         stopLogcat()
+        stopUiPolling()
     }
+
+    private fun startUiPolling() {
+        stopUiPolling()
+        uiPollingJob = viewModelScope.launch {
+            // Initial load
+            dumpMuttonAgent(silent = true)
+            while (true) {
+                kotlinx.coroutines.delay(5000L) // Poll every 5 seconds
+                dumpMuttonAgent(silent = true)
+            }
+        }
+    }
+
+    private fun stopUiPolling() {
+        uiPollingJob?.cancel()
+        uiPollingJob = null
+    }
+
 
     fun startLogcat() {
         viewModelScope.launch {
@@ -197,29 +240,47 @@ class ToolViewModel : ViewModel(), KoinComponent {
         }
     }
 
-    fun dumpMuttonAgent() {
+    fun dumpMuttonAgent(silent: Boolean = false) {
         viewModelScope.launch {
-            val response = adbRepository.dumpMuttonAgent(includeImage = true)
+            val response = adbRepository.dumpMuttonAgent(includeImage = true, silent = silent)
             if (response != null && response.isNotEmpty()) {
                 try {
                     val gson = Gson()
                     val dumpResult = gson.fromJson(response, DumpResult::class.java)
                     if (dumpResult != null && dumpResult.status == "ok") {
-                        val uiNode = gson.fromJson(dumpResult.output, UiNode::class.java)
-                        _uiDumpRoot.value = uiNode
-                        _uiDumpScreenWidth.value = dumpResult.screen_width
-                        _uiDumpScreenHeight.value = dumpResult.screen_height
-                        
-                        if (dumpResult.screenshot != null && dumpResult.screenshot.isNotEmpty()) {
-                            try {
-                                val bytes = Base64.getDecoder().decode(dumpResult.screenshot)
-                                val skiaImage = Image.makeFromEncoded(bytes)
-                                _uiDumpScreenshot.value = skiaImage.toComposeImageBitmap()
-                            } catch (e: Exception) {
-                                _uiDumpScreenshot.value = null
-                            }
-                        } else {
-                            _uiDumpScreenshot.value = null
+                        val newJsonDump = dumpResult.output
+                        val newScreenshot = dumpResult.screenshot ?: ""
+
+                        val lastItem = _timelineItems.value.lastOrNull() as? TimelineItem.Record
+                        val hasChange = lastItem == null || lastItem.snapshot.jsonDump != newJsonDump
+
+                        lastRawScreenshotBase64 = newScreenshot // Cache raw screenshot
+
+                        val timestamp = System.currentTimeMillis()
+                        val snapshot = Snapshot(
+                            timestamp = timestamp,
+                            jsonDump = newJsonDump,
+                            screenshotBase64 = newScreenshot
+                        )
+                        val newRecord = TimelineItem.Record(
+                            id = "rec_$timestamp",
+                            timestamp = timestamp,
+                            snapshot = snapshot,
+                            hasChange = hasChange,
+                            eventLabel = if (hasChange) "Poll" else null
+                        )
+
+                        val currentList = _timelineItems.value.toMutableList()
+                        currentList.add(newRecord)
+                        if (currentList.size > 36) { // Keep last 3 minutes (36 steps * 5s)
+                            currentList.removeAt(0)
+                        }
+                        _timelineItems.value = currentList
+                        _selectedTimelineIndex.value = currentList.size - 1
+
+                        // If state changed or first load, sync active view components
+                        if (hasChange) {
+                            updateActiveSnapshot(snapshot, dumpResult.screen_width, dumpResult.screen_height)
                         }
                     }
                 } catch (e: Exception) {
@@ -228,6 +289,97 @@ class ToolViewModel : ViewModel(), KoinComponent {
             }
         }
     }
+
+    fun performTap(node: UiNode) {
+        viewModelScope.launch {
+            val activeRoot = _uiDumpRoot.value ?: return@launch
+            val beforeTimestamp = System.currentTimeMillis()
+            
+            // Generate click coordinates
+            val x = (node.bounds.left + node.bounds.right) / 2
+            val y = (node.bounds.top + node.bounds.bottom) / 2
+
+            log("Agent", "Simulating tap on element at ($x, $y)", LogLevel.INFO)
+            val response = adbRepository.tapCoordinate(x, y)
+
+            if (response != null && response.isNotEmpty()) {
+                try {
+                    val gson = Gson()
+                    val dumpResult = gson.fromJson(response, DumpResult::class.java)
+                    if (dumpResult != null && dumpResult.status == "ok") {
+                        val afterTimestamp = System.currentTimeMillis()
+                        val afterJsonDump = dumpResult.output
+                        val afterScreenshot = dumpResult.screenshot ?: ""
+
+                        lastRawScreenshotBase64 = afterScreenshot // Update cache
+
+                        val afterSnapshot = Snapshot(
+                            timestamp = afterTimestamp,
+                            jsonDump = afterJsonDump,
+                            screenshotBase64 = afterScreenshot
+                        )
+
+                        val newRecord = TimelineItem.Record(
+                            id = "rec_$afterTimestamp",
+                            timestamp = afterTimestamp,
+                            snapshot = afterSnapshot,
+                            hasChange = true, // Tapping always causes an active event node to be created
+                            eventLabel = "Tap",
+                            actionDetails = ActionDetails(
+                                command = "tap",
+                                args = mapOf("x" to x, "y" to y)
+                            )
+                        )
+
+                        val currentList = _timelineItems.value.toMutableList()
+                        currentList.add(newRecord)
+                        if (currentList.size > 36) { // Keep last 3 minutes (36 steps * 5s)
+                            currentList.removeAt(0)
+                        }
+                        _timelineItems.value = currentList
+                        _selectedTimelineIndex.value = currentList.size - 1
+
+                        updateActiveSnapshot(afterSnapshot, dumpResult.screen_width, dumpResult.screen_height)
+                    }
+                } catch (e: Exception) {
+                    log("Agent", "Failed to parse tap response: ${e.message}", LogLevel.ERROR)
+                }
+            }
+        }
+    }
+
+    fun selectTimelineItem(item: TimelineItem) {
+        val record = item as? TimelineItem.Record ?: return
+        if (!record.hasChange) return // Disallow selecting linear time line points that have no changes
+        
+        val list = _timelineItems.value
+        val index = list.indexOfFirst { it.id == record.id }
+        if (index >= 0) {
+            _selectedTimelineIndex.value = index
+            updateActiveSnapshot(record.snapshot, _uiDumpScreenWidth.value, _uiDumpScreenHeight.value)
+        }
+    }
+
+    private fun updateActiveSnapshot(snapshot: Snapshot, screenWidth: Int, screenHeight: Int) {
+        try {
+            val gson = Gson()
+            val uiNode = gson.fromJson(snapshot.jsonDump, UiNode::class.java)
+            _uiDumpRoot.value = uiNode
+            _uiDumpScreenWidth.value = screenWidth
+            _uiDumpScreenHeight.value = screenHeight
+
+            if (snapshot.screenshotBase64.isNotEmpty()) {
+                val bytes = Base64.getDecoder().decode(snapshot.screenshotBase64)
+                val skiaImage = Image.makeFromEncoded(bytes)
+                _uiDumpScreenshot.value = skiaImage.toComposeImageBitmap()
+            } else {
+                _uiDumpScreenshot.value = null
+            }
+        } catch (e: Exception) {
+            _uiDumpScreenshot.value = null
+        }
+    }
+
 
     // File Explorer properties
     private val _currentPath = MutableStateFlow("/")

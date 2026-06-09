@@ -37,7 +37,7 @@ class AdbRepository {
     suspend fun sendKeyEvent(keyCode: Int) = adbObserver.sendKeyEvent(keyCode)
     suspend fun setupMuttonAgent(forceInstall: Boolean = false) = adbObserver.setupMuttonAgent(forceInstall)
     suspend fun pingMuttonAgent() = adbObserver.pingMuttonAgent()
-    suspend fun dumpMuttonAgent(includeImage: Boolean = false, quality: Int = 2) = adbObserver.dumpMuttonAgent(includeImage, quality)
+    suspend fun dumpMuttonAgent(includeImage: Boolean = false, quality: Int = 2, silent: Boolean = false) = adbObserver.dumpMuttonAgent(includeImage, quality, silent)
     suspend fun executeAdbShell(command: String) = adbObserver.executeAdbShell(command)
     suspend fun tapCoordinate(x: Int, y: Int) = adbObserver.tapCoordinate(x, y)
     suspend fun swipe(startX: Int, startY: Int, endX: Int, endY: Int) = adbObserver.swipe(startX, startY, endX, endY)

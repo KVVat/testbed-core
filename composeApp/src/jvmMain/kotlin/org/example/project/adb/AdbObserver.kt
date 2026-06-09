@@ -268,6 +268,7 @@ class AdbObserver(private val scope: CoroutineScope) {
     }
 
     private suspend fun fetchProcessList() {
+        if (!adb.isDeviceInitialised()) return
         try {
             val result = adb.adb.execute(ShellCommandRequest("ps -A -o PID,NAME"), adb.deviceSerial)
             val map = mutableMapOf<String, String>()
@@ -284,6 +285,7 @@ class AdbObserver(private val scope: CoroutineScope) {
     }
 
     suspend fun startLogcat(pastMinutes: Int = 10) {
+        if (!adb.isDeviceInitialised()) return
         ProcessNameResolver.clear()
         fetchProcessList()
 
@@ -677,14 +679,18 @@ class AdbObserver(private val scope: CoroutineScope) {
         }
     }
 
-    suspend fun dumpMuttonAgent(includeImage: Boolean = false, quality: Int = 2): String? {
+    suspend fun dumpMuttonAgent(includeImage: Boolean = false, quality: Int = 2, silent: Boolean = false): String? {
         val jsonCmd = "{\"cmd\":\"get_ui_dump\",\"include_image\":$includeImage,\"image_quality\":$quality}"
-        log("Agent", "Requesting UI dump from agent... (includeImage=$includeImage)", LogLevel.INFO)
+        if (!silent) {
+            log("Agent", "Requesting UI dump from agent... (includeImage=$includeImage)", LogLevel.INFO)
+        }
         var response = sendToAgent(jsonCmd, silent = true)
         
         // 1. Connection failed
         if (response == null) {
-            log("Agent", "Agent not responding. Attempting auto-setup...", LogLevel.INFO)
+            if (!silent) {
+                log("Agent", "Agent not responding. Attempting auto-setup...", LogLevel.INFO)
+            }
             setupMuttonAgent(forceInstall = false)
             response = sendToAgent(jsonCmd)
         }
@@ -698,10 +704,13 @@ class AdbObserver(private val scope: CoroutineScope) {
         }
 
         if (response != null && response.isNotEmpty() && !response.contains("\"status\":\"ng\"")) {
-            log("Agent", "Dump Success! Output size: ${response.length} chars", LogLevel.PASS)
-            //log("Agent Dump", response, LogLevel.DEBUG)
+            if (!silent) {
+                log("Agent", "Dump Success! Output size: ${response.length} chars", LogLevel.PASS)
+            }
         } else {
-            log("Agent", "Dump failed or empty response.", LogLevel.WARN)
+            if (!silent) {
+                log("Agent", "Dump failed or empty response.", LogLevel.WARN)
+            }
         }
         return response
     }

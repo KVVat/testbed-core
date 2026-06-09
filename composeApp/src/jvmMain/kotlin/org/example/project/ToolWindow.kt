@@ -61,6 +61,8 @@ fun ToolWindow(viewModel: ToolViewModel, onCloseRequest: () -> Unit) {
     val uiDumpScreenshot by viewModel.uiDumpScreenshot.collectAsState()
     val uiDumpScreenWidth by viewModel.uiDumpScreenWidth.collectAsState()
     val uiDumpScreenHeight by viewModel.uiDumpScreenHeight.collectAsState()
+    val timelineItems by viewModel.timelineItems.collectAsState()
+    val selectedTimelineIndex by viewModel.selectedTimelineIndex.collectAsState()
     val logcatBufferSize = viewModel.logcatBufferSize
     val isRootMode by viewModel.isRootMode.collectAsState()
 
@@ -229,20 +231,7 @@ fun ToolWindow(viewModel: ToolViewModel, onCloseRequest: () -> Unit) {
                             icon = Icons.Default.ContentCopy
                         )
                     } else if (selectedTab == 1) {
-                        // UI Inspector Tools
-                        TooltipIconButton(
-                            icon = Icons.Default.CellTower,
-                            tooltip = "Ping Agent",
-                            tint = Color(0xFF569CD6),
-                            onClick = { viewModel.pingMuttonAgent() }
-                        )
-                        Spacer(Modifier.height(16.dp))
-                        TooltipIconButton(
-                            icon = Icons.Default.AccountTree,
-                            tooltip = "Dump UI Tree",
-                            tint = Color(0xFFFFC66D),
-                            onClick = { viewModel.dumpMuttonAgent() }
-                        )
+                        // UI Inspector Tools (Auto-polls on display, no manual buttons needed)
                     } else {
                         // File Explorer Tools
                         TooltipIconButton(
@@ -389,7 +378,11 @@ fun ToolWindow(viewModel: ToolViewModel, onCloseRequest: () -> Unit) {
                             rootNode = uiDumpRoot,
                             screenshot = uiDumpScreenshot,
                             screenWidth = uiDumpScreenWidth,
-                            screenHeight = uiDumpScreenHeight
+                            screenHeight = uiDumpScreenHeight,
+                            timelineItems = timelineItems,
+                            selectedTimelineIndex = selectedTimelineIndex,
+                            onSelectTimelineIndex = { item -> viewModel.selectTimelineItem(item) },
+                            onPerformTap = { node -> viewModel.performTap(node) }
                         )
                     } else {
                         // File Explorer Pane
