@@ -1,60 +1,59 @@
-# エージェント実行のためのプロジェクト知見
+# Project Knowledge for Agent Execution
 
-## 1. 禁じられた事柄 / 重大な教訓
+## 1. Constraints and Critical Lessons
 
-*   **`AdbDeviceRule.kt` の変更・削除は厳禁**: このファイルはテスト関連のコードであり、将来的な拡張のために存在します。プロダクションコードのビルドエラーを修正する際に、このファイルの内容を安易に削除したり、大きく変更したりしてはいけません。依存関係の問題は、Gradle設定で解決すべきです。
-*   **コンパイルエラーの蔓延に注意**: 大規模な変更を一度に行うと、コンパイルエラーが広範囲に及び、原因特定が困難になります。変更は小分けにし、都度ビルドチェックを行うことが重要です。エラーが一定以上広がった場合、速やかに変更をロールバックし、アプローチを再検討する必要があります。
-*   **依存関係の理解**: 特にマルチプラットフォームプロジェクトでは、`commonMain`, `jvmMain`, `commonTest` などのソースセット間で依存関係がどのように解決されるかを正確に理解することが不可欠です。誤ったソースセットに依存関係を追加すると、予期せぬビルドエラーを引き起こします。
-*   **コンパイルエラーを確認してから引き渡し（ループ時以外）**: エージェントが自律的にループ処理している場面を除き、コード変更を行った後は一度ビルド（`./gradlew assemble`等）を行い、コンパイルエラーが出ないことを確認してからユーザーへ回答を引き渡すこと。
-*   **Compose Desktopでの `TextOverflow.Ellipsis`**: `androidx.compose.ui.text.font.TextOverflow.Ellipsis` はCompose Desktop環境では利用できない場合があります。Compose Multiplatformのバージョンによってはサポートされていない可能性があるので、代替手段を検討するか、使用を避けるべきです。
+*   **Do Not Modify or Delete `AdbDeviceRule.kt`:** This file contains test-related helper code reserved for future expansions. When resolving production code compilation or dependency issues, do not lazily delete or majorly alter its contents. Any dependency conflicts should be resolved in the Gradle configurations.
+*   **Prevent Compilation Error Propagation:** Making massive changes all at once can cause build errors to expand rapidly, making root-cause analysis extremely difficult. Changes must be partitioned and validated incrementally (checking compiler outputs frequently). If build errors spread beyond control, rollback immediately and re-evaluate your approach.
+*   **Understand Multiplatform Dependency Resolution:** In Kotlin Multiplatform projects, it is vital to understand how dependencies resolve between source sets (e.g., `commonMain`, `jvmMain`, `commonTest`). Adding dependencies to the wrong source set will trigger unexpected build failures.
+*   **Verify Build Cleanliness Before Handover:** Unless you are executing in an autonomous self-contained loop, always run a compilation check (such as `./gradlew assemble`) after code edits to ensure there are no compilation errors before returning control to the user.
+*   **Compose Desktop and `TextOverflow.Ellipsis`:** `androidx.compose.ui.text.font.TextOverflow.Ellipsis` might not be supported depending on the Compose Multiplatform version. Avoid using it in `jvmMain` environments, or implement an alternative text overflow truncation logic.
 
-## 2. Adamライブラリの実装に関する知見
+## 2. ADB Operations using Adam Library
 
-Adamライブラリを使用したADB操作に関する重要な実装方法です。
+Important patterns for managing ADB connections via the Adam library:
 
-*   **Adamクライアントの取得**: `AdbDeviceRule`クラス内で`AndroidDebugBridgeClientFactory().build()`を使用して`Adam`クライアントのインスタンスを取得します。`AdbObserver`のようなロジッククラスは、この`AdbDeviceRule`の`adb`プロパティを通じて`Adam`クライアントにアクセスします。
-*   **シェルコマンドの実行**:
-    *   一般的なシェルコマンドは `adamClient.execute(ShellCommandRequest("your command"), serial)` の形式で実行します。
-    *   例: `input text "string"` コマンドでは、スペースを含む文字列は `text.replace(" ", "%s")` のようにエスケープする必要があります。
-*   **Logcatストリームの取得**:
-    *   Logcatをリアルタイムでストリームするには、`ChanneledLogcatRequest`を使用します。
-    *   `adamClient.execute(request = ChanneledLogcatRequest(), serial = serial)` を呼び出すと、`ReceiveChannel<String>`が返されます。
-    *   この`ReceiveChannel<String>`は、`consumeEach { line -> ... }` を使用して、各ログ行を非同期で処理する必要があります。
-    *   関連ドキュメント: [Adam Logcat](https://malinskiy.github.io/adam/docs/logcat/logcat/)
-*   **デバイスのリブート**:
-    *   デバイスを特定のモードで再起動するには、`RebootRequest`を使用します。
-    *   例: `adamClient.execute(RebootRequest(RebootMode.BOOTLOADER), serial)` でブートローダーモードへ再起動できます。
-    *   `RebootRequest` と `RebootMode` は `com.malinskiy.adam.request.misc` パッケージに存在します。
-*   **非同期処理とコルーチンスコープ**:
-    *   重いADB操作は必ず `Dispatchers.IO` を使用したコルーチン内で実行し、UIスレッドをブロックしないようにします。
-    *   `AdbObserver`のようなロジッククラス内で`Job`を管理し、`viewModel.viewModelScope.launch { ... }` を使用してライフサイクルと連携させることが推奨されます。
+*   **Retrieving the Adam Client:** Inside `AdbDeviceRule.kt`, construct the client instance using `AndroidDebugBridgeClientFactory().build()`. High-level logic observers (e.g., `AdbObserver`) access the client through the rule's `adb` property.
+*   **Executing Shell Commands:** 
+    *   General commands are executed using `adamClient.execute(ShellCommandRequest("your command"), serial)`.
+    *   For escaping arguments containing spaces (like `input text "hello world"`), replace spaces with `%s`: `text.replace(" ", "%s")`.
+*   **Logcat Streaming:**
+    *   To stream logcat in real-time, use `ChanneledLogcatRequest`.
+    *   Executing `adamClient.execute(request = ChanneledLogcatRequest(), serial = serial)` returns a `ReceiveChannel<String>`.
+    *   Consume this channel asynchronously using `consumeEach { line -> ... }` on a dedicated dispatcher.
+    *   For detail, refer to: [Adam Logcat Documentation](https://malinskiy.github.io/adam/docs/logcat/logcat/)
+*   **Device Rebooting:**
+    *   To reboot a device into a specific mode, use `RebootRequest`.
+    *   Example: `adamClient.execute(RebootRequest(RebootMode.BOOTLOADER), serial)`. These classes are located under `com.malinskiy.adam.request.misc`.
+*   **Coroutines & Thread Safety:**
+    *   Always execute heavy ADB network operations within the `Dispatchers.IO` coroutine scope to avoid blocking the main UI thread.
+    *   Bind coroutine jobs to the UI lifecycle using `viewModel.viewModelScope.launch { ... }` inside observers.
 
-## 3. プロジェクト構造と依存関係の管理
+## 3. Project Structure & Dependency Management
 
-*   **`libs.versions.toml`**: Gradle Version Catalogs (`libs.versions.toml`) を使用して、依存関係のバージョンを一元管理します。新しいライブラリを追加する際は、まずここにバージョンとエイリアスを定義します。
+*   **`libs.versions.toml`**: Centralize all dependencies and versions using Gradle Version Catalogs. Always declare new library coordinates and aliases here first before adding them to build files.
 *   **`build.gradle.kts`**:
-    *   `commonMain.dependencies`には、プラットフォーム固有ではない共通のロジックやUIで使用される依存関係（例: Compose Multiplatformのコアライブラリ、Adam、JUnitなど）を追加します。
-    *   `jvmMain.dependencies`には、JVM固有の依存関係（例: Compose Desktop固有のライブラリ、`kotlinx-coroutines-swing`など）を追加します。
-    *   **JUnitの配置**: `AdbDeviceRule.kt`のようにアプリがJUnitテストフレームワークの要素を直接利用する場合、その依存関係は`commonMain`に配置する必要があります。
+    *   Add cross-platform libraries (Compose Multiplatform core, Adam, JUnit etc.) to `commonMain.dependencies`.
+    *   Add JVM-only dependencies (Compose Desktop integrations, `kotlinx-coroutines-swing`) to `jvmMain.dependencies`.
+    *   **JUnit Placement:** If a production/plugin class needs direct access to JUnit runner components (like `AdbDeviceRule.kt`), place JUnit dependencies inside `commonMain` rather than standard test-only scopes.
 
-## 4. ログ出力のベストプラクティス
+## 4. Logging Best Practices
 
-*   `AppViewModel.log(tag: String, message: String, level: LogLevel = LogLevel.INFO)`: この形式の`log`関数は、呼び出し元がログレベルを省略できるため非常に便利です。
-*   ログのフィルタリングと最大行数制限は、パフォーマンスとUXのために重要です。
+*   `AppViewModel.log(tag: String, message: String, level: LogLevel = LogLevel.INFO)`: Prefer using this overload since calling layers can omit the default log level.
+*   Log filtering and maximum buffer limits must be strictly maintained to prevent performance bottlenecks.
 
-## 5. MCPサーバーの動作確認・手動テスト手順
+## 5. MCP Server Manual Diagnostics & Verification
 
-エージェント（Jetski等）が現在のコンテキストで直接MCPツール群を認識できない場合や、動作を単体で検証したい場合は、以下のスクリプトを利用してローカルのSSEサーバー（ポート11452）に対して手動でJSON-RPCリクエストを発行できます。
+If the LLM client cannot directly bind to the TestBed Core MCP server, you can manually verify SSE connectivity on port 11452 by running this script:
 
 ```bash
 #!/bin/bash
-# 1. SSEエンドポイントへの接続と SessionID の取得
+# 1. Connect to SSE Endpoint and retrieve SessionID
 rm -f /tmp/sse_out_$$
 curl -sN http://localhost:11452/mcp > /tmp/sse_out_$$ &
 SSE_PID=$!
 sleep 2
 
-# (重要) HTTPヘッダの改行コード(CR)が悪影響を及ぼすため tr -d '\r' すること！
+# (CRITICAL) Clean carriage returns (CR) from HTTP headers
 SESSION_INFO=$(grep "^data: " /tmp/sse_out_$$ | head -n 1 | sed 's/^data: //' | tr -d '\r')
 
 if [ -z "$SESSION_INFO" ]; then
@@ -65,7 +64,7 @@ fi
 
 MSG_ENDPOINT="http://localhost:11452${SESSION_INFO}"
 
-# 2. tools/list の呼び出し
+# 2. Call tools/list
 echo -e "\n--- Calling tools/list ---"
 curl -s -X POST "$MSG_ENDPOINT" \
      -H "Content-Type: application/json" \
@@ -73,7 +72,7 @@ curl -s -X POST "$MSG_ENDPOINT" \
 
 sleep 1
 
-# 3. tools/call によるツールの実行（例: get_logcat）
+# 3. Call tool (e.g. get_logcat)
 echo -e "\n--- Calling get_logcat ---"
 curl -s -X POST "$MSG_ENDPOINT" \
      -H "Content-Type: application/json" \
@@ -81,7 +80,7 @@ curl -s -X POST "$MSG_ENDPOINT" \
 
 sleep 2
 
-# 4. 結果（SSEストリームに出力されるレスポンス）の確認
+# 4. Check outputs
 echo -e "\n--- SSE Output ---"
 cat /tmp/sse_out_$$
 
@@ -89,20 +88,24 @@ kill $SSE_PID 2>/dev/null
 rm -f /tmp/sse_out_$$
 ```
 
----
-この知見が、今後のエージェント実行に役立つことを願っています。
+## 6. Mutton Agent (Android Test Client) Deployment
 
-## 6. Mutton Agent（Android側テストエージェント）デプロイと挙動の知見
+Troubleshooting checklist for deploying mutton-agent to physical devices:
 
-エージェント自身（mutton-agent等）をAndroid端末へデプロイして動かす際のトラブルシューティングに関する教訓です。
+*   **Google Play Protect Installs Blocking:** When executing background installs (`adb install`/`pm install`) of raw test APKs, Google Play Protect may prompt a security warning dialog that hangs the execution thread indefinitely. Ensure Play Protect is **disabled** on the target device, or resolve the dialog manually on-screen.
+*   **Non-Blocking Agent Execution (`am instrument`):** Starting tests via `am instrument` blocks the execution process until complete. If invoked through Adam, this holds Ktor connection response pools. Wrap it in a non-blocking coroutine `launch(Dispatchers.IO)` and verify agent presence through ping socket handshake instead.
+*   **JVM and `org.json` incompatibility:** Do not import `org.json.JSONObject` in shared code running on Compose Desktop. It will trigger `NoClassDefFoundError` due to classloader mismatch. Use `Gson` or `kotlinx.serialization` instead.
+*   **Debugging Output:** Avoid using raw `println()` inside Android agent logic. Instead, utilize `android.util.Log.i(TAG, message)` so traces can be properly routed through logcat.
 
-*   **Google Play Protect によるインストールのブロック**: 未署名や野良のテスト用APKを `adb install` (あるいは `pm install`) でバックグラウンドインストールしようとすると、端末側のGoogle Play Protectが警告ダイアログを出し、コマンドが永遠にハングバックする（あるいはサイレントに失敗する）現象が発生します。エージェントのデプロイが原因不明で停止・ハングする場合は、**対象デバイスのPlay Protect設定がオフになっているか**を確実にご確認ください。
-*   **ブロッキングを避けたエージェントの起動 (`am instrument`)**: エージェントを `am instrument` で起動する場合、通常このコマンドはプロセスが終了するまで戻ってきません。Adamライブラリ経由で実行した場合、その通信スレッドを占有してしまうため、非同期プロセスとして切り離す (`&` など) か、Coroutineの `launch(Dispatchers.IO)` 内で実行させるなど、**メインサーバ側の後続処理（特にKtorのHTTPリスポンスなど）をブロックしない**設計が必須です。起動の成否確認は `am instrument` の戻り値ではなく、TCPソケットなどを通じた `ping` / `pong` リクエストの疎通で判断するべきです。
-*   **JVMアプリと `org.json` の非互換性**: JVM Desktop用（`composeApp`などのjvmMain環境）でJSON文字列をパースする際、Android環境と同じ感覚で `org.json.JSONObject` を使おうとすると依存関係のエラーや `NoClassDefFoundError`等を引き起こします。共通ロジックやDesktopで動くモジュールでは、**必ず `Gson` や `kotlinx.serialization` のようなJVM互換のモダンなパーサーを利用**してください。
-*   **Android上のデバッグ出力は `Log` を使う**: エージェントアプリ側のデバッグ用出力に `println()` を多用すると、コマンドラインからの確認やLogcatからの情報収集が非常に困難になります。通信の送受信などの挙動のトレースには `println()` ではなく、**`android.util.Log.i(TAG, message)` を使用し、Logcat経由で一元的に追えるようにする**ことが、今後の解析を容易にするベストプラクティスです。
+## 7. Direct MCP Connections
 
-## 7. LLMエージェントからMCPサーバーへのダイレクト接続について
+LLM Agents can connect directly to TestBed Core's SSE interface (`http://localhost:11452/mcp`). Avoid using `mcp_call.sh` shell redirects except for local manual command line debugging.
 
-JetskiなどのLLMエージェントから本プロジェクトのMCPサーバー(`testbed-core`)の機能を利用する場合、初期はコンテナ・サンドボックスの制約やプロトコルの互換性問題を回避するために `scripts/mcp_call.sh` などの外部スクリプトを用いた間接的な呼び出しを使用していました。
-しかし現在では、`testbed-core` のネットワークバインディング（IPv6 `::` 対応）やSSE応答設定が適切に修正されているため、**LLMエージェントは自身に提供されたMCPツールをダイレクトに呼び出すことが可能です（推奨）。**
-`mcp_call.sh` などの外部スクリプトは、エージェント環境外からの動作検証や手動デバッグ目的のフォールバックとしてのみ使用してください。
+## 8. X.509 Certificate and Revocation (OCSP/CRL) Verification Insights
+
+When dealing with certificate validation and mock responders on modern Android versions (Android 15+ / Conscrypt):
+
+*   **Strict KeyUsage Constraints (Conscrypt):** Modern Android Conscrypt/OkHttp engines strictly require the `keyUsage` extension (e.g., `critical, digitalSignature, keyEncipherment`) and `extendedKeyUsage` (e.g., `serverAuth`) in server certificates. Lack of these constraints will cause immediate `SSLHandshakeException` (connection closed / 525) during TLS handshakes. Always generate certificates using a compliant extensions template file.
+*   **OpenSSL CA Index Duplicate DN Error:** By default, OpenSSL CA index databases (`index.txt`) enforce unique subject DN constraints. Having multiple mock certificates with the same DN (e.g. `/CN=localhost` for different ports) will crash the responder with `Error creating name index` on startup. To prevent this, always create a matching `index.txt.attr` file containing `unique_subject = no` in the DB directory.
+*   **AIA Port Alignments:** Ensure the Authority Info Access (AIA) OCSP URI defined inside the certificate extension file matches the exact port number where the host OCSP responder is running.
+*   **Testbed Port Reversal Automation:** Avoid requesting developers to run manual `adb reverse` commands before testing. Instead, implement setup/teardown automation loops inside the test class using `ProcessBuilder("adb", "-s", serial, "reverse", "tcp:port", "tcp:port")` to dynamically route all necessary ports (e.g., mock endpoints 4443-4448 and responders 8888-8891) and remove them on completion.

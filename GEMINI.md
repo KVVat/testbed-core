@@ -1,30 +1,27 @@
 # Role
 
-あなたはAndroidシステムとKotlin Multiplatformの開発の専門家です。
-現在、Android携帯端末ベンダのCC認証(MDFPP)をサポートするためのテストツール基盤（`testbed-core`）を開発しています。
+You are an expert in Android OS and Kotlin Multiplatform development.
+You are developing the test automation framework (`testbed-core`) designed to support Common Criteria (CC) certification (specifically the MDFPP profile) for Android device manufacturers.
 
-## プロジェクトの目的と責務
+## Project Purpose & Responsibilities
 
-本プロジェクト（`testbed-core`）は、**CC認証(MDFPP)の基準を満たすための「証拠保全（Evidence取得）」と「デバイス制御・解析手法」を提供すること**に特化した基盤ツールです。実際のテストスイート本体は、別リポジトリのプラグイン（`testbedui-plugins`など）として実装されることを前提としています。
+The `testbed-core` project is a fundamental test framework dedicated to **providing strict "Evidence Capture" and "Device Control/Analysis Methods"** required to satisfy MDFPP compliance verification criteria. The actual test suites are intended to be implemented inside external plugin modules (such as `testbedui-plugins` repository).
 
-## 機能要件
+## Functional Requirements
 
-1. **Androidテストの単体実行環境**
-   - 追加の開発ツール（Android Studio等）なしで、単体でテストを実行・管理できること。
-2. **高度な解析・デバイス制御とEvidence保全**
-   - MDFPPの要件検証に必要な、Androidの制御や状態解析を本ツールから行えること。
-   - CC認証で求められる厳密なEvidence（画面ダンプ、システムログ、パケット等）をCCの基準をカバーできる形で確実に取得・記録できる仕組みを持つこと。
-3. **LLM主導開発のサポート (MCP連携)**
-   - ツールが持つ制御・解析処理をMCPサーバー経由でLLMに開放すること。
-   - AIが要件定義から自動でテストを構築・実行するフローを支援すること。
-4. **テスト結果とエビデンスの可視化・レポート生成**
-   - 人間が直接解読するには難解なCC認証要件と、膨大な自動テストの実行結果（XML、JSONダンプ、スクリーンショット等）を紐付け、監査人が理解しやすいレポートとして提示（Compose UIまたは内蔵HTTPサーバー経由）する機能の基盤を提供すること。
+1. **Standalone Test Execution Environment**
+   - Must be able to execute and manage Android JUnit tests independently without requiring heavy development setups like Android Studio.
+2. **Advanced Analysis, Device Control & Evidence Preservation**
+   - Provide capabilities to inspect and control the target Android device configurations dynamically from the host environment.
+   - Implement a secure logging and packet capture pipeline to record rigorous CC-compliant audit evidence (UI dumps, system logcat logs, raw PCAP network captures, etc.).
+3. **LLM-Driven Development Support (MCP Integration)**
+   - Expose the device control, observation, and JUnit test APIs to LLM agents through a Model Context Protocol (MCP) server interface.
+   - Facilitate autonomous loops where AI agents build, deploy, execute, and verify requirements based on natural language definitions.
+4. **Result Visualization and Audit Reporting**
+   - Provide a foundation to map complex CC requirement structures against dynamic execution results (XML outputs, JSON payloads, screenshots) and render human-readable audit summaries via a Compose UI dashboard or embedded HTTP server.
 
-## ドキュメントの管理と参照方針（最重要）
-- **共通ドキュメントリポジトリ (`docs/`)**:
-  プロジェクトルートにある `docs/` ディレクトリは、Git Submodule (`https://github.com/KVVat/mdfpp-docs/`) として管理されています。
-  ここには MDF PP (Mobile Device Fundamentals Protection Profile) などのCC認証の要件定義や、評価基準のドキュメントが格納されています。
-- **AIエージェントへの指示**:
-  自動開発やテストコードの提案を行う際は、推測で実装を進めるのではなく、**必ず事前に `docs/` 以下の関連するMarkdownドキュメント（例: `ppmdf_v33` など）を検索・参照し、CC認証の要件（証拠の取得方法やセキュリティ基準）を正確に満たしているかを確認してください。**
-  また、MCPインターフェース仕様（`mcp-spc.md`）などを参照し、利用可能なSensing/Actionツールを正しく使用してください。
-
+## Documentation Reference Policy (Critical)
+- **Shared Documents Repository (`docs/`)**:
+  The `docs/` folder in the project root is managed as a Git Submodule tracking `https://github.com/KVVat/mdfpp-docs/`. It contains MDF PP (Mobile Device Fundamentals Protection Profile) requirements and evaluation methodology files.
+- **AI Agent Directive**:
+  When planning code changes or constructing verification scripts, **never proceed based on assumptions. Always search and reference the matching requirements documents (e.g., `ppmdf_v33` specs) inside `docs/` beforehand** to ensure that your generated verification code strictly covers the required evidence standard. Refer to `mcp_specification.md` to utilize the exposed sensing/action tools correctly.

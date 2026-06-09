@@ -88,6 +88,33 @@ To run the application in development mode with hot-reload support:
 **"ADB not found" error:**
 Ensure you are launching the app using the provided scripts (e.g., `testbed-windows.bat`). These scripts add the bundled `bin/platform-tools` to the `PATH` temporarily.
 
+## LLM Agent Integration (Model Context Protocol)
+
+TestBed Core exposes its device control and test execution APIs as a Model Context Protocol (MCP) server. 
+
+### Stdio-to-SSE Bridge (Recommended for LLM Clients)
+
+While TestBed Core runs an SSE (Server-Sent Events) network server at `http://localhost:11452/mcp` on port 11452, direct HTTP/SSE connections from LLM agents (like Antigravity) can sometimes suffer from network socket hangs or polling delays.
+
+To resolve this, we provide a **Stdio-to-SSE Bridge** script: `scripts/mcp_stdio_bridge.py`. This script starts a stable, local Stdio channel for the LLM agent and proxies all JSON-RPC requests to the background Ktor SSE server.
+
+#### How to configure in Antigravity / Cline
+
+Add the following to your `mcp_config.json` configuration file:
+
+```json
+{
+  "mcpServers": {
+    "testbed-core": {
+      "command": "python3",
+      "args": ["/Users/wkouki/AndroidStudioProjects/testbed-core/scripts/mcp_stdio_bridge.py"]
+    }
+  }
+}
+```
+
+This ensures maximum stability using Antigravity's native Stdio process channel.
+
 ## License
 
 This project is licensed under the Apache License, Version 2.0.
