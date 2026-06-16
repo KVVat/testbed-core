@@ -7,11 +7,20 @@ This specification defines the complete set of MCP tools exposed by TestBed Core
 ## 1. Sensing Tools (Environment Observability)
 
 ### `get_ui_dump`
-* **Description:** Retrieves the current Android on-screen UI hierarchy (excluding invisible nodes) and optionally captures a compressed screenshot.
+* **Description:** Retrieves the current Android on-screen UI hierarchy. If execution takes more than 1 second, it returns immediately with `status: "running"` and a `task_id`. Use `receive_ui_dump` to check status and retrieve the output.
 * **Parameters:**
-  * `include_image` (boolean, optional, default: `false`): If true, returns a Base64-encoded WebP screenshot.
-  * `image_quality` (int, optional, default: `2`): Image compression factor (1 = 100%, 2 = 50%, 3 = 33%, 4 = 25%). Higher factors are recommended to minimize token consumption.
-* **Returns:** JSON containing `json_dump` (XML-like hierarchy nodes) and `screenshot`.
+  * `format` (string, optional, default: `"summary"`): `"summary"` (compact list) or `"json"` (full tree).
+  * `include_image` (boolean, optional, default: `false`): If true, captures a screenshot.
+  * `image_quality` (int, optional, default: `4`): Image quality (1-4).
+* **Returns:** UI dump output OR a task token:
+  * Fast execution: Plain text of the dump (or JSON structure if format is json).
+  * Long execution: `{"status": "running", "task_id": "UUID-string"}`.
+
+### `receive_ui_dump`
+* **Description:** Polls and retrieves the UI dump output of a pending background task initiated by `get_ui_dump`.
+* **Parameters:**
+  * `task_id` (string, required): The task ID returned by `get_ui_dump`.
+* **Returns:** UI dump output if completed, OR a JSON containing `status: "running"` if still active.
 
 ### `get_device_state`
 * **Description:** Retrieves system-level state properties from the device.
@@ -27,21 +36,21 @@ This specification defines the complete set of MCP tools exposed by TestBed Core
 
 ## 2. Action Tools (User Interface Interactions)
 
-All action tools automatically block and wait for UI idle state before returning. Upon completion, they yield the latest interactable UI dump summary (clickable/scrollable elements) to minimize agent iteration loops.
+Action tools trigger physical user interface operations on the device. They execute and block until completion, returning a simple confirmation JSON. They no longer implicitly return the UI dump; to see screen updates, call `get_ui_dump` separately.
 
 ### `tap`
 * **Description:** Taps the screen at specified physical coordinates `(x, y)`.
 * **Parameters:**
   * `x` (int, required): X coordinate.
   * `y` (int, required): Y coordinate.
-* **Returns:** Updated `get_ui_dump` summary JSON.
+* **Returns:** Confirmation JSON (e.g., `{"status":"ok","action":"tap",...}`).
 
 ### `input_text`
 * **Description:** Enters text into the currently focused input field.
 * **Parameters:**
   * `text` (string, required): The string to type. Spaces are automatically escaped.
   * `press_enter` (boolean, optional, default: `true`): If true, fires a virtual Enter key press after entering text.
-* **Returns:** Updated `get_ui_dump` summary JSON.
+* **Returns:** Confirmation JSON.
 
 ### `swipe`
 * **Description:** Drags across the screen from start coordinates to end coordinates.
@@ -50,30 +59,39 @@ All action tools automatically block and wait for UI idle state before returning
   * `start_y` (int, required)
   * `end_x` (int, required)
   * `end_y` (int, required)
-* **Returns:** Updated `get_ui_dump` summary JSON.
+* **Returns:** Confirmation JSON.
 
 ### `press_key`
 * **Description:** Fires a physical or virtual system key event.
 * **Parameters:**
   * `keycode` (string, required): Keycode alias (e.g., `"BACK"`, `"HOME"`, `"ENTER"`).
-* **Returns:** Updated `get_ui_dump` summary JSON.
+* **Returns:** Confirmation JSON.
 
 ---
 
 ## 3. System Tools (ADB & Application Management)
 
 ### `execute_adb_shell`
-* **Description:** Executes a raw shell command directly on the connected Android device.
+* **Description:** Executes a raw shell command directly on the connected Android device. If execution takes more than 1 second, it returns immediately with `status: "running"` and a `task_id`. Use `shell_receive` to check status and retrieve outputs.
 * **Parameters:**
-  * `command` (string, required): Command string to execute (e.g., `"pm list packages"`).
-* **Returns:** Standard output (`stdout`) and standard error (`stderr`) responses.
+  * `command` (string, required): Command string to execute.
+* **Returns:** Completed execution result OR a task token:
+  * Fast execution: `{"status": "completed", "exit_code": X, "stdout": "...", "stderr": "..."}` (outputs are truncated to the last 4KB if they exceed it).
+  * Long execution: `{"status": "running", "task_id": "UUID-string"}`.
+
+### `shell_receive`
+* **Description:** Polls and retrieves the execution status and output of a background shell task initiated by `execute_adb_shell`.
+* **Parameters:**
+  * `task_id` (string, required): The task ID returned by `execute_adb_shell`.
+* **Returns:** JSON containing `status` (`running`, `completed`, `failed`), and output fields (`stdout`, `stderr`, `exit_code`) once finished. Outputs are capped to the latest 4KB.
 
 ### `open_settings`
 * **Description:** Launches a target Android system settings panel via standard Intents.
 * **Parameters:**
   * `panel` (string, required): Target settings panel (options: `ROOT`, `SECURITY`, `WIFI`, `APP_DETAILS`, `DEVELOPER`).
   * `package_name` (string, optional): Required only when `panel` is set to `APP_DETAILS`.
-* **Returns:** Execution status and the updated UI dump.
+* **Returns:** Confirmation JSON.
+
 
 ### `push_file`
 * **Description:** Transports a file from the Host PC to the Android device filesystem (behaves like `adb push`).

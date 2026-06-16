@@ -89,7 +89,6 @@ class ToolViewModel : ViewModel(), KoinComponent {
 
 
     private val baseDir: File get() = if (JUnitBridge.baseDir.isNotBlank()) File(JUnitBridge.baseDir) else File(".")
-    private val logRecorder: LogRecorder get() = LogRecorder(baseFileName = File(baseDir, "logcat.log").absolutePath)
 
     var logcatBufferSize: Int = 30000
 
@@ -219,9 +218,6 @@ class ToolViewModel : ViewModel(), KoinComponent {
         pendingLogLine?.let { log ->
             if (log.message.isNotBlank()) {
                 _logcatLines.add(log)
-                viewModelScope.launch(Dispatchers.IO) {
-                    logRecorder.write(log)
-                }
                 if (_logcatLines.size > logcatBufferSize) {
                     _logcatLines.removeRange(0, _logcatLines.size - logcatBufferSize)
                 }
@@ -711,6 +707,5 @@ class ToolViewModel : ViewModel(), KoinComponent {
     override fun onCleared() {
         super.onCleared()
         cleanupTempEditDir()
-        logRecorder.close()
     }
 }

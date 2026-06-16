@@ -40,8 +40,82 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.CoroutineScope
+import com.google.gson.Gson
+import org.example.project.LogLine
+import org.example.project.tools.LogcatParser
+import org.example.project.tools.LogRecorder
+import org.example.project.mcp.UiDumpSummarizer
+
 
 class AdbObserver(private val scope: CoroutineScope) {
+
+    private val baseDir: File get() = if (JUnitBridge.baseDir.isNotBlank()) File(JUnitBridge.baseDir) else File(".")
+    private val logRecorder = LogRecorder(baseFileName = File(baseDir, "logcat.log").absolutePath)
+    
+    private var pendingLogLine: LogLine? = null
+
+    private fun handleLogcatLineForRecord(rawLine: String) {
+        if (LogcatParser.isHeader(rawLine)) {
+            flushPendingLogRecord()
+            pendingLogLine = LogcatParser.parseHeader(rawLine)
+            return
+        }
+
+        if (rawLine.isBlank()) {
+            flushPendingLogRecord()
+            return
+        }
+
+        pendingLogLine?.let { current ->
+            ProcessNameResolver.updateFromLog(current.tag, rawLine)
+            val newMessage = if (current.message.isEmpty()) rawLine else "${current.message}\n$rawLine"
+            pendingLogLine = current.copy(message = newMessage)
+        }
+    }
+
+    private fun flushPendingLogRecord() {
+        pendingLogLine?.let { log ->
+            if (log.message.isNotBlank()) {
+                logRecorder.write(log)
+            }
+        }
+        pendingLogLine = null
+    }
+
+    private val activeShellTasks = java.util.concurrent.ConcurrentHashMap<String, ShellTask>()
+    private val activeDumpTasks = java.util.concurrent.ConcurrentHashMap<String, UiDumpTask>()
+
+    private suspend fun executeShellViaProcessBuilder(command: String, timeoutMs: Long = 5000): String {
+        return withContext(Dispatchers.IO) {
+            try {
+                val serial = adb.deviceSerial
+                log("ADB", "Executing raw CLI shell: adb -s $serial shell $command", LogLevel.INFO)
+                
+                val process = ProcessBuilder("adb", "-s", serial, "shell", command)
+                    .redirectErrorStream(true)
+                    .start()
+                
+                val completed = process.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+                
+                if (completed) {
+                    val output = process.inputStream.bufferedReader().use { it.readText() }
+                    val exitValue = process.exitValue()
+                    if (exitValue == 0) {
+                        output.trim()
+                    } else {
+                        "Error (exit $exitValue): ${output.trim()}"
+                    }
+                } else {
+                    process.destroyForcibly()
+                    log("ADB", "CLI Shell timed out after ${timeoutMs}ms: $command", LogLevel.ERROR)
+                    "Error: CLI shell timed out after ${timeoutMs}ms"
+                }
+            } catch (e: Exception) {
+                log("ADB", "CLI Shell execution exception: ${e.message}", LogLevel.ERROR)
+                "Error: ${e.message}"
+            }
+        }
+    }
  
     private enum class SuType {
         STANDARD, // su -c "command"
@@ -316,7 +390,10 @@ class AdbObserver(private val scope: CoroutineScope) {
                     while (buffer.contains("\n")) {
                         val index = buffer.indexOf("\n")
                         val line = buffer.substring(0, index).trimEnd('\r', '\n')
-                        if (line.isNotBlank()) _logcatLines.tryEmit(line)
+                        if (line.isNotBlank()) {
+                            _logcatLines.tryEmit(line)
+                            handleLogcatLineForRecord(line)
+                        }
                         buffer.delete(0, index + 1)
                     }
                 }
@@ -326,6 +403,7 @@ class AdbObserver(private val scope: CoroutineScope) {
                 }
             } finally {
                 _logcatFlush.tryEmit(Unit)
+                flushPendingLogRecord()
                 buffer.clear()
             }
         }
@@ -334,6 +412,7 @@ class AdbObserver(private val scope: CoroutineScope) {
     fun stopLogcat() {
         logcatJob?.cancel()
         logcatJob = null
+        flushPendingLogRecord()
     }
 
     // ★ Mutton Agentのデプロイと起動
@@ -680,39 +759,54 @@ class AdbObserver(private val scope: CoroutineScope) {
     }
 
     suspend fun dumpMuttonAgent(includeImage: Boolean = false, quality: Int = 2, silent: Boolean = false): String? {
-        val jsonCmd = "{\"cmd\":\"get_ui_dump\",\"include_image\":$includeImage,\"image_quality\":$quality}"
-        if (!silent) {
-            log("Agent", "Requesting UI dump from agent... (includeImage=$includeImage)", LogLevel.INFO)
-        }
-        var response = sendToAgent(jsonCmd, silent = true)
-        
-        // 1. Connection failed
-        if (response == null) {
+        return withContext(Dispatchers.IO) {
+            val jsonCmd = "{\"cmd\":\"get_ui_dump\",\"include_image\":$includeImage,\"image_quality\":$quality}"
             if (!silent) {
-                log("Agent", "Agent not responding. Attempting auto-setup...", LogLevel.INFO)
+                log("Agent", "Requesting UI dump from agent... (includeImage=$includeImage)", LogLevel.INFO)
             }
-            setupMuttonAgent(forceInstall = false)
-            response = sendToAgent(jsonCmd)
-        }
-        
-        // 2. Dead UIAutomation node (rootInActiveWindow null) -> Requires hard restart
-        if (response != null && response.contains("\"status\":\"ng\"") && response.contains("rootInActiveWindow returned null")) {
-            log("Agent", "UiAutomation state is broken (rootInActiveWindow null). Need hard restart.", LogLevel.ERROR)
-            cleanupMuttonAgent() // Kill the ghost process
-            setupMuttonAgent(forceInstall = false) // Restart agent
-            response = sendToAgent(jsonCmd) // Retry
-        }
+            
+            val response = kotlinx.coroutines.withTimeoutOrNull(15000) {
+                var resp = sendToAgent(jsonCmd, silent = true, timeoutMs = 15000)
+                
+                // 1. Connection failed
+                if (resp == null) {
+                    if (!silent) {
+                        log("Agent", "Agent not responding. Attempting auto-setup...", LogLevel.INFO)
+                    }
+                    setupMuttonAgent(forceInstall = false)
+                    resp = sendToAgent(jsonCmd, timeoutMs = 15000)
+                }
+                
+                // 2. Dead UIAutomation node -> Requires hard restart
+                if (resp != null && resp.contains("\"status\":\"ng\"") && resp.contains("rootInActiveWindow returned null")) {
+                    log("Agent", "UiAutomation state is broken (rootInActiveWindow null). Need hard restart.", LogLevel.ERROR)
+                    cleanupMuttonAgent()
+                    setupMuttonAgent(forceInstall = false)
+                    resp = sendToAgent(jsonCmd, timeoutMs = 15000)
+                }
+                resp
+            }
 
-        if (response != null && response.isNotEmpty() && !response.contains("\"status\":\"ng\"")) {
-            if (!silent) {
-                log("Agent", "Dump Success! Output size: ${response.length} chars", LogLevel.PASS)
+            if (response == null) {
+                log("Agent", "UI dump request timed out (15s limit reached). Resetting agent in background...", LogLevel.ERROR)
+                // Run reset asynchronously to avoid blocking the caller
+                scope.launch(Dispatchers.IO) {
+                    cleanupMuttonAgent()
+                    setupMuttonAgent(forceInstall = false)
+                }
+            } else {
+                if (response.isNotEmpty() && !response.contains("\"status\":\"ng\"")) {
+                    if (!silent) {
+                        log("Agent", "Dump Success! Output size: ${response.length} chars", LogLevel.PASS)
+                    }
+                } else {
+                    if (!silent) {
+                        log("Agent", "Dump failed or empty response.", LogLevel.WARN)
+                    }
+                }
             }
-        } else {
-            if (!silent) {
-                log("Agent", "Dump failed or empty response.", LogLevel.WARN)
-            }
+            response
         }
-        return response
     }
 
     suspend fun executeAdbShell(command: String): String {
@@ -743,7 +837,7 @@ class AdbObserver(private val scope: CoroutineScope) {
             log("Agent", "Tap failed: $response", LogLevel.ERROR)
             return null
         }
-        return dumpMuttonAgent(includeImage = false)
+        return "{\"status\":\"ok\",\"action\":\"tap\",\"x\":$x,\"y\":$y}"
     }
 
     suspend fun swipe(startX: Int, startY: Int, endX: Int, endY: Int): String? {
@@ -754,7 +848,7 @@ class AdbObserver(private val scope: CoroutineScope) {
             log("Agent", "Swipe failed: $response", LogLevel.ERROR)
             return null
         }
-        return dumpMuttonAgent(includeImage = false)
+        return "{\"status\":\"ok\",\"action\":\"swipe\",\"start_x\":$startX,\"start_y\":$startY,\"end_x\":$endX,\"end_y\":$endY}"
     }
 
     suspend fun pressKey(keycode: String): String? {
@@ -766,7 +860,7 @@ class AdbObserver(private val scope: CoroutineScope) {
                 log("Agent", "Pressing key via adb: $keycodeArg", LogLevel.INFO)
                 adb.adb.execute(ShellCommandRequest("input keyevent $keycodeArg"), serial)
                 kotlinx.coroutines.delay(500)
-                dumpMuttonAgent(includeImage = false)
+                "{\"status\":\"ok\",\"action\":\"pressKey\",\"keycode\":\"$keycodeArg\"}"
             } catch (e: Exception) {
                 log("Agent", "Press key failed: ${e.message}", LogLevel.ERROR)
                 null
@@ -783,7 +877,7 @@ class AdbObserver(private val scope: CoroutineScope) {
             log("Agent", "Input text failed: $response", LogLevel.ERROR)
             return null
         }
-        return dumpMuttonAgent(includeImage = false)
+        return "{\"status\":\"ok\",\"action\":\"inputText\",\"text\":\"$escapedText\",\"press_enter\":$pressEnter}"
     }
 
     suspend fun getMuttonAgentVersion(): String? {
@@ -802,63 +896,121 @@ class AdbObserver(private val scope: CoroutineScope) {
 
     suspend fun clearLogcatBuffer(): String {
         if (!adbState.value.isValid) return "Error: No device connected."
-        return withContext(Dispatchers.IO) { 
-            try {
-                adb.adb.execute(ShellCommandRequest("logcat -c"), adb.deviceSerial)
-                "Logcat cleared successfully."
-            } catch (e: Exception) {
-                "Error: ${e.message}"
-            }
+        val result = executeShellViaProcessBuilder("logcat -c", timeoutMs = 3000)
+        return if (result.startsWith("Error")) {
+            result
+        } else {
+            "Logcat cleared successfully."
         }
     }
 
-    suspend fun getFilteredLogcat(tags: List<String>, level: String, grepPattern: String, maxLines: Int, process: String = ""): String {
-        if (!adbState.value.isValid) return "Error: No device connected."
+    private data class LogEntry(
+        val rawLines: String,
+        val timestamp: String,
+        val pid: String,
+        val packageName: String,
+        val levelChar: Char,
+        val tag: String,
+        val message: String
+    )
+
+    private fun parseLogEntries(lines: List<String>): List<LogEntry> {
+        val entries = mutableListOf<LogEntry>()
+        val logPattern = Regex("^(?:\\d{4}-)?(\\d{2}-\\d{2}\\s\\d{2}:\\d{2}:\\d{2}\\.\\d{3})\\s*(?:(\\d+)/?([^\\s]*))?\\s*([VDIWEF])/([^:]+):\\s*(.*)$")
+        
+        var currentLines = StringBuilder()
+        var currentHeaderMatch: MatchResult? = null
+
+        for (line in lines) {
+            val match = logPattern.matchEntire(line)
+            if (match != null) {
+                if (currentHeaderMatch != null) {
+                    entries.add(createLogEntry(currentLines.toString(), currentHeaderMatch))
+                }
+                currentHeaderMatch = match
+                currentLines = StringBuilder(line)
+            } else {
+                if (currentHeaderMatch != null) {
+                    currentLines.append("\n").append(line)
+                }
+            }
+        }
+        if (currentHeaderMatch != null) {
+            entries.add(createLogEntry(currentLines.toString(), currentHeaderMatch))
+        }
+        return entries
+    }
+
+    private fun createLogEntry(raw: String, match: MatchResult): LogEntry {
+        val (timestamp, pid, packageName, levelCharStr, tag, message) = match.destructured
+        return LogEntry(
+            rawLines = raw,
+            timestamp = timestamp,
+            pid = pid,
+            packageName = packageName,
+            levelChar = levelCharStr.firstOrNull() ?: 'V',
+            tag = tag,
+            message = message
+        )
+    }
+
+    private fun isLevelAllowed(logLevelChar: Char, minLevel: String): Boolean {
+        val levels = listOf('V', 'D', 'I', 'W', 'E', 'F')
+        val logIndex = levels.indexOf(logLevelChar)
+        val minChar = minLevel.firstOrNull() ?: 'V'
+        val minIndex = levels.indexOf(minChar)
+        return logIndex >= minIndex
+    }
+
+    suspend fun getFilteredLogcat(
+        tags: List<String>, 
+        level: String, 
+        grepPattern: String, 
+        maxLines: Int, 
+        process: String = ""
+    ): String {
+        val logFile = File(baseDir, "logcat.log")
+        if (!logFile.exists()) return "Error: Log file not found."
+
         return withContext(Dispatchers.IO) {
             try {
-                val serial = adb.deviceSerial
-                val filterSpec = if (tags.isEmpty()) {
-                    "*:$level"
-                } else {
-                    tags.joinToString(" ") { "$it:$level" } + " *:S"
-                }
+                val lines = logFile.readLines()
+                val entries = parseLogEntries(lines)
                 
-                val grepArg = if (grepPattern.isNotBlank()) {
-                    val escaped = grepPattern.replace("'", "'\\''")
-                    " -e '$escaped'"
-                } else ""
+                val cappedMaxLines = maxLines.coerceAtMost(1000)
+                val filteredLines = mutableListOf<String>()
+                
+                for (i in entries.indices.reversed()) {
+                    val entry = entries[i]
 
-                // プロセスフィルタ: PID or パッケージ名 → PID解決
-                val pidArg = if (process.isNotBlank()) {
-                    val resolvedPid = if (process.all { it.isDigit() }) {
-                        // 数字のみ → PIDとしてそのまま使う
-                        process
-                    } else {
-                        // パッケージ名 → ProcessNameResolverで逆引き
-                        val cachedPids = ProcessNameResolver.findPidsByPackageName(process)
-                        if (cachedPids.isNotEmpty()) {
-                            cachedPids.first() // logcat --pid は単一PIDのみ対応
-                        } else {
-                            // キャッシュに無い場合は pidof コマンドでフォールバック
-                            try {
-                                val pidofResult = adb.adb.execute(
-                                    ShellCommandRequest("pidof $process"), serial
-                                ).output.trim()
-                                pidofResult.split(Regex("\\s+")).firstOrNull() ?: ""
-                            } catch (_: Exception) { "" }
-                        }
+                    // 1. レベルフィルタ
+                    if (!isLevelAllowed(entry.levelChar, level)) continue
+
+                    // 2. タグフィルタ
+                    if (tags.isNotEmpty() && !tags.contains(entry.tag.trim())) continue
+
+                    // 3. プロセスフィルタ
+                    if (process.isNotBlank()) {
+                        val pidMatches = entry.pid.isNotBlank() && entry.pid == process
+                        val packageMatches = entry.packageName.isNotBlank() && entry.packageName.contains(process, ignoreCase = true)
+                        if (!pidMatches && !packageMatches) continue
                     }
-                    if (resolvedPid.isNotBlank()) " --pid=$resolvedPid" else ""
-                } else ""
-                
-                // -t restricts output to maxLines at the source. -e performs grep at the source.
-                val cmd = "logcat -d -t $maxLines -v threadtime$pidArg$grepArg $filterSpec"
-                val response = adb.adb.execute(ShellCommandRequest(cmd), serial).output
-                
-                response.trim()
+
+                    // 4. Grepフィルタ
+                    if (grepPattern.isNotBlank()) {
+                        val rawMatches = entry.rawLines.contains(grepPattern, ignoreCase = true)
+                        if (!rawMatches) continue
+                    }
+
+                    filteredLines.add(entry.rawLines)
+                    if (filteredLines.size >= cappedMaxLines) {
+                        break
+                    }
+                }
+
+                filteredLines.reversed().joinToString("\n")
             } catch (e: Exception) {
-                log("ADB", "Failed to get logcat: ${e.message}", LogLevel.ERROR)
-                "Error: ${e.message}"
+                "Error reading log file: ${e.message}"
             }
         }
     }
@@ -917,38 +1069,173 @@ class AdbObserver(private val scope: CoroutineScope) {
 
     suspend fun openSettings(panel: String, packageName: String? = null): String? {
         if (!adbState.value.isValid) return "Error: No device connected."
-        return withContext(Dispatchers.IO) {
-            try {
-                val serial = adb.deviceSerial
-                val intentBuilder = StringBuilder("am start -a ")
-                when (panel.uppercase()) {
-                    "ROOT" -> intentBuilder.append("android.settings.SETTINGS")
-                    "SECURITY" -> intentBuilder.append("android.settings.SECURITY_SETTINGS")
-                    "WIFI" -> intentBuilder.append("android.settings.WIFI_SETTINGS")
-                    "DEVELOPER" -> intentBuilder.append("android.settings.APPLICATION_DEVELOPMENT_SETTINGS")
-                    "APP_DETAILS" -> {
-                        intentBuilder.append("android.settings.APPLICATION_DETAILS_SETTINGS")
-                        if (packageName != null) {
-                            intentBuilder.append(" -d package:$packageName")
-                        } else {
-                            return@withContext "Error: APP_DETAILS requires package_name parameter."
-                        }
-                    }
-                    else -> return@withContext "Error: Unknown panel '$panel'."
-                }
-                log("ADB", "Opening settings $panel...", LogLevel.INFO)
-                val response = adb.adb.execute(ShellCommandRequest(intentBuilder.toString()), serial)
-                if (response.exitCode == 0) {
-                    delay(1000) // Wait for UI transition
-                    dumpMuttonAgent(includeImage = false) // return the latest UI Dump
+        
+        val intentBuilder = StringBuilder("am start -a ")
+        when (panel.uppercase()) {
+            "ROOT" -> intentBuilder.append("android.settings.SETTINGS")
+            "SECURITY" -> intentBuilder.append("android.settings.SECURITY_SETTINGS")
+            "WIFI" -> intentBuilder.append("android.settings.WIFI_SETTINGS")
+            "DEVELOPER" -> intentBuilder.append("android.settings.APPLICATION_DEVELOPMENT_SETTINGS")
+            "APP_DETAILS" -> {
+                intentBuilder.append("android.settings.APPLICATION_DETAILS_SETTINGS")
+                if (packageName != null) {
+                    intentBuilder.append(" -d package:$packageName")
                 } else {
-                    log("ADB", "Open settings failed: ${response.output}", LogLevel.ERROR)
-                    "Error: ${response.output}"
+                    return "Error: APP_DETAILS requires package_name parameter."
                 }
-            } catch (e: Exception) {
-                log("ADB", "Failed to open settings: ${e.message}", LogLevel.ERROR)
-                "Error: ${e.message}"
             }
+            else -> return "Error: Unknown panel '$panel'."
+        }
+
+        val result = executeShellViaProcessBuilder(intentBuilder.toString(), timeoutMs = 5000)
+        return if (result.startsWith("Error")) {
+            result
+        } else {
+            delay(1000) // Wait for UI transition
+            "{\"status\":\"ok\",\"action\":\"openSettings\",\"panel\":\"$panel\"}"
+        }
+    }
+
+    suspend fun shellExecute(command: String): String {
+        if (!adbState.value.isValid) return "{\"status\":\"error\",\"message\":\"No device connected.\"}"
+        
+        return withContext(Dispatchers.IO) {
+            val taskId = java.util.UUID.randomUUID().toString()
+            val serial = adb.deviceSerial
+            
+            log("ADB", "Starting async shell ($taskId): $command", LogLevel.INFO)
+            
+            val task = ShellTask(taskId, command, job = kotlinx.coroutines.Job())
+            activeShellTasks[taskId] = task
+            
+            val realJob = scope.launch(Dispatchers.IO) {
+                try {
+                    val response = adb.adb.execute(ShellCommandRequest(command), serial)
+                    task.appendStdout(response.output)
+                    task.exitCode = response.exitCode
+                } catch (e: Exception) {
+                    task.appendStderr(e.message ?: "Execution failed")
+                    task.exitCode = -1
+                } finally {
+                    task.isCompleted = true
+                }
+            }
+            
+            task.job = realJob
+            
+            val completedInTime = kotlinx.coroutines.withTimeoutOrNull(1000) {
+                realJob.join()
+                true
+            }
+            
+            if (completedInTime == true) {
+                activeShellTasks.remove(taskId)
+                val status = if (task.exitCode == 0) "completed" else "failed"
+                Gson().toJson(mapOf(
+                    "status" to status,
+                    "exit_code" to task.exitCode,
+                    "stdout" to task.stdout,
+                    "stderr" to task.stderr
+                ))
+            } else {
+                Gson().toJson(mapOf(
+                    "status" to "running",
+                    "task_id" to taskId
+                ))
+            }
+        }
+    }
+
+    suspend fun shellReceive(taskId: String): String {
+        val task = activeShellTasks[taskId] 
+            ?: return "{\"status\":\"error\",\"message\":\"Task not found\"}"
+            
+        return if (task.isCompleted) {
+            activeShellTasks.remove(taskId)
+            val status = if (task.exitCode == 0) "completed" else "failed"
+            Gson().toJson(mapOf(
+                "status" to status,
+                "exit_code" to task.exitCode,
+                "stdout" to task.stdout,
+                "stderr" to task.stderr
+            ))
+        } else {
+            Gson().toJson(mapOf(
+                "status" to "running",
+                "task_id" to taskId
+            ))
+        }
+    }
+
+    suspend fun uiDumpExecute(format: String, includeImage: Boolean = false, quality: Int = 2): String {
+        if (!adbState.value.isValid) return "{\"status\":\"error\",\"message\":\"No device connected.\"}"
+
+        return withContext(Dispatchers.IO) {
+            val taskId = java.util.UUID.randomUUID().toString()
+            
+            val task = UiDumpTask(taskId, kotlinx.coroutines.Job())
+            activeDumpTasks[taskId] = task
+            
+            val realJob = scope.launch(Dispatchers.IO) {
+                try {
+                    val rawResult = dumpMuttonAgent(includeImage, quality, silent = true)
+                    if (rawResult != null) {
+                        val processed = if (format == "summary") {
+                            UiDumpSummarizer.summarizeInteractable(rawResult)
+                        } else {
+                            rawResult
+                        }
+                        task.output = processed
+                        task.isCompleted = true
+                    } else {
+                        task.isFailed = true
+                        task.isCompleted = true
+                    }
+                } catch (e: Exception) {
+                    task.isFailed = true
+                    task.isCompleted = true
+                }
+            }
+            
+            task.job = realJob
+            
+            val completedInTime = kotlinx.coroutines.withTimeoutOrNull(1000) {
+                realJob.join()
+                true
+            }
+            
+            if (completedInTime == true && task.isCompleted) {
+                activeDumpTasks.remove(taskId)
+                if (task.isFailed || task.output == null) {
+                    "{\"status\":\"error\",\"message\":\"Failed to capture UI dump.\"}"
+                } else {
+                    task.output!!
+                }
+            } else {
+                Gson().toJson(mapOf(
+                    "status" to "running",
+                    "task_id" to taskId
+                ))
+            }
+        }
+    }
+
+    suspend fun uiDumpReceive(taskId: String): String {
+        val task = activeDumpTasks[taskId]
+            ?: return "{\"status\":\"error\",\"message\":\"Task not found\"}"
+            
+        return if (task.isCompleted) {
+            activeDumpTasks.remove(taskId)
+            if (task.isFailed || task.output == null) {
+                "{\"status\":\"error\",\"message\":\"Failed to capture UI dump.\"}"
+            } else {
+                task.output!!
+            }
+        } else {
+            Gson().toJson(mapOf(
+                "status" to "running",
+                "task_id" to taskId
+            ))
         }
     }
 
@@ -1388,3 +1675,67 @@ data class AdbState(
     val deviceSerial: String = "",
     val deviceInfo: String = ""
 )
+
+class ShellTask(
+    val id: String,
+    val command: String,
+    var job: kotlinx.coroutines.Job
+) {
+    private val stdoutLock = Any()
+    private val stderrLock = Any()
+    private val maxOutputBytes = 4096
+
+    private val stdoutBuilder = java.lang.StringBuilder()
+    private val stderrBuilder = java.lang.StringBuilder()
+    
+    var isStdoutTruncated: Boolean = false
+        private set
+    var isStderrTruncated: Boolean = false
+        private set
+
+    var exitCode: Int? = null
+    var isCompleted: Boolean = false
+
+    val stdout: String
+        get() = synchronized(stdoutLock) { 
+            if (isStdoutTruncated) {
+                "[Output truncated. Showing last 4096 bytes...]\n" + stdoutBuilder.toString()
+            } else {
+                stdoutBuilder.toString()
+            }
+        }
+
+    val stderr: String
+        get() = synchronized(stderrLock) { 
+            if (isStderrTruncated) {
+                "[Error output truncated. Showing last 4096 bytes...]\n" + stderrBuilder.toString()
+            } else {
+                stderrBuilder.toString()
+            }
+        }
+
+    fun appendStdout(text: String) = synchronized(stdoutLock) {
+        stdoutBuilder.append(text)
+        if (stdoutBuilder.length > maxOutputBytes) {
+            stdoutBuilder.delete(0, stdoutBuilder.length - maxOutputBytes)
+            isStdoutTruncated = true
+        }
+    }
+
+    fun appendStderr(text: String) = synchronized(stderrLock) {
+        stderrBuilder.append(text)
+        if (stderrBuilder.length > maxOutputBytes) {
+            stderrBuilder.delete(0, stderrBuilder.length - maxOutputBytes)
+            isStderrTruncated = true
+        }
+    }
+}
+
+class UiDumpTask(
+    val id: String,
+    var job: kotlinx.coroutines.Job
+) {
+    var output: String? = null
+    var isCompleted: Boolean = false
+    var isFailed: Boolean = false
+}

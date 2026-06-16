@@ -86,14 +86,25 @@ STATIC_TOOLS = [
     },
     {
         "name": "get_ui_dump",
-        "description": "Retrieves the current UI hierarchy. Default format is 'summary' (compact flat list optimized for LLMs, ~1KB). Use format='json' for full tree with optional Base64 screenshot.",
+        "description": "Retrieves the current UI hierarchy. Default format is 'summary' (compact flat list optimized for LLMs, ~1KB). If execution does not complete in 1 second, it returns a task_id and status='running' for receive_ui_dump.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "format": {"type": "string", "description": "Output format: 'summary' (compact flat list, default) or 'json' (full tree)"},
-                "include_image": {"type": "boolean", "description": "Include screenshot. With format='summary', returns TextContent + ImageContent together. Default false"},
+                "include_image": {"type": "boolean", "description": "Include screenshot. Default false"},
                 "image_quality": {"type": "integer", "description": "1=100%, 2=50%, 3=33%, 4=25%. Default 4 (25%)"}
             }
+        }
+    },
+    {
+        "name": "receive_ui_dump",
+        "description": "Retrieve the results of a pending get_ui_dump task.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "The task ID returned by get_ui_dump"}
+            },
+            "required": ["task_id"]
         }
     },
     {
@@ -103,7 +114,7 @@ STATIC_TOOLS = [
     },
     {
         "name": "tap",
-        "description": "Physically taps the specified (x, y) coordinates. *Automatically waits for idle and returns the latest UI dump after execution.",
+        "description": "Physically taps the specified (x, y) coordinates. Does not return the updated UI dump; call get_ui_dump separately if needed.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -115,7 +126,7 @@ STATIC_TOOLS = [
     },
     {
         "name": "input_text",
-        "description": "Inputs text into the currently focused input field. *Automatically waits for idle and returns the latest UI dump after execution.",
+        "description": "Inputs text into the currently focused input field. Does not return the updated UI dump; call get_ui_dump separately if needed.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -127,7 +138,7 @@ STATIC_TOOLS = [
     },
     {
         "name": "swipe",
-        "description": "Swipes (scrolls) the screen between the specified coordinates. *Automatically waits for idle and returns the latest UI dump after execution.",
+        "description": "Swipes (scrolls) the screen between the specified coordinates. Does not return the updated UI dump; call get_ui_dump separately if needed.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -141,7 +152,7 @@ STATIC_TOOLS = [
     },
     {
         "name": "press_key",
-        "description": "Sends a physical or system key event. *Automatically waits for idle and returns the latest UI dump after execution.",
+        "description": "Sends a physical or system key event. Does not return the updated UI dump; call get_ui_dump separately if needed.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -157,13 +168,24 @@ STATIC_TOOLS = [
     },
     {
         "name": "execute_adb_shell",
-        "description": "Executes an adb shell command directly against the connected device. e.g. ls -l /sdcard",
+        "description": "Executes an adb shell command directly against the connected device. If execution takes more than 1 second, it returns immediately with a task_id and status='running'. You must use shell_receive to check and fetch the output.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "command": {"type": "string", "description": "Shell command to execute"}
             },
             "required": ["command"]
+        }
+    },
+    {
+        "name": "shell_receive",
+        "description": "Retrieves results of a background shell task started via execute_adb_shell.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "Task ID returned by execute_adb_shell"}
+            },
+            "required": ["task_id"]
         }
     },
     {

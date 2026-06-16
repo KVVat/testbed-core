@@ -218,11 +218,11 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "get_ui_dump",
-            description = "Retrieves the current UI hierarchy. Default format is 'summary' (compact flat list optimized for LLMs, ~1KB). Use format='json' for full tree with optional Base64 screenshot.",
+            description = "Retrieves the current UI hierarchy. Default format is 'summary' (compact flat list optimized for LLMs, ~1KB). If execution does not complete in 1 second, it returns a task_id for receive_ui_dump.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
                     putJsonObject("format") { put("type", "string"); put("description", "Output format: 'summary' (compact flat list, default) or 'json' (full tree)") }
-                    putJsonObject("include_image") { put("type", "boolean"); put("description", "Include screenshot. With format='summary', returns TextContent + ImageContent together. Default false") }
+                    putJsonObject("include_image") { put("type", "boolean"); put("description", "Include screenshot. Default false") }
                     putJsonObject("image_quality") { put("type", "integer"); put("description", "1=100%, 2=50%, 3=33%, 4=25%. Default 4 (25%)") }
                 }
             )
@@ -232,24 +232,24 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
             val includeImage = args["include_image"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: false
             val quality = args["image_quality"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 4
 
-            val rawResult = adbObserver.dumpMuttonAgent(includeImage, quality)
-                ?: return@addTool CallToolResult(content = listOf(TextContent("Error: Failed to get UI dump")))
+            val rawResult = adbObserver.uiDumpExecute(format, includeImage, quality)
+            CallToolResult(content = listOf(TextContent(rawResult)))
+        }
 
-            if (format == "summary") {
-                val summaryText = UiDumpSummarizer.summarize(rawResult)
-                val contents = buildList {
-                    add(TextContent(summaryText))
-                    if (includeImage) {
-                        val screenshotBase64 = UiDumpSummarizer.extractScreenshot(rawResult)
-                        if (screenshotBase64 != null) {
-                            add(ImageContent(data = screenshotBase64, mimeType = "image/jpeg"))
-                        }
-                    }
-                }
-                CallToolResult(content = contents)
-            } else {
-                CallToolResult(content = listOf(TextContent(rawResult)))
-            }
+        mcpServer.addTool(
+            name = "receive_ui_dump",
+            description = "Retrieve the results of a pending get_ui_dump task.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("task_id") { put("type", "string"); put("description", "The task ID returned by get_ui_dump") }
+                },
+                required = listOf("task_id")
+            )
+        ) { request ->
+            val args = request.params.arguments ?: emptyMap()
+            val taskId = args["task_id"]?.jsonPrimitive?.contentOrNull ?: ""
+            val result = adbObserver.uiDumpReceive(taskId)
+            CallToolResult(content = listOf(TextContent(result)))
         }
 
         mcpServer.addTool(
@@ -262,7 +262,7 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "tap",
-            description = "Physically taps the specified (x, y) coordinates. *Automatically waits for idle and returns the latest UI dump after execution.",
+            description = "Physically taps the specified (x, y) coordinates. Does not return the updated UI dump; call get_ui_dump separately if needed.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
                     putJsonObject("x") { put("type", "integer"); put("description", "X coordinate to tap") }
@@ -275,13 +275,12 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
             val x = args["x"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
             val y = args["y"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
             val rawResult = adbObserver.tapCoordinate(x, y)
-            val result = if (rawResult != null) UiDumpSummarizer.summarizeInteractable(rawResult) else null
-            CallToolResult(content = listOf(TextContent(result ?: "Error: Failed to tap")))
+            CallToolResult(content = listOf(TextContent(rawResult ?: "Error: Failed to tap")))
         }
 
         mcpServer.addTool(
             name = "input_text",
-            description = "Inputs text into the currently focused input field. *Automatically waits for idle and returns the latest UI dump after execution.",
+            description = "Inputs text into the currently focused input field. Does not return the updated UI dump; call get_ui_dump separately if needed.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
                     putJsonObject("text") { put("type", "string"); put("description", "Text to input (ASCII only)") }
@@ -294,13 +293,12 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
             val text = args["text"]?.jsonPrimitive?.contentOrNull ?: ""
             val pressEnter = args["press_enter"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: true
             val rawResult = adbObserver.inputText(text, pressEnter)
-            val result = if (rawResult != null) UiDumpSummarizer.summarizeInteractable(rawResult) else null
-            CallToolResult(content = listOf(TextContent(result ?: "Error: Failed to input text")))
+            CallToolResult(content = listOf(TextContent(rawResult ?: "Error: Failed to input text")))
         }
 
         mcpServer.addTool(
             name = "swipe",
-            description = "Swipes (scrolls) the screen between the specified coordinates. *Automatically waits for idle and returns the latest UI dump after execution.",
+            description = "Swipes (scrolls) the screen between the specified coordinates. Does not return the updated UI dump; call get_ui_dump separately if needed.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
                     putJsonObject("start_x") { put("type", "integer"); put("description", "Start X coordinate") }
@@ -317,13 +315,12 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
             val ex = args["end_x"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
             val ey = args["end_y"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
             val rawResult = adbObserver.swipe(sx, sy, ex, ey)
-            val result = if (rawResult != null) UiDumpSummarizer.summarizeInteractable(rawResult) else null
-            CallToolResult(content = listOf(TextContent(result ?: "Error: Failed to swipe")))
+            CallToolResult(content = listOf(TextContent(rawResult ?: "Error: Failed to swipe")))
         }
 
         mcpServer.addTool(
             name = "press_key",
-            description = "Sends a physical or system key event. *Automatically waits for idle and returns the latest UI dump after execution.",
+            description = "Sends a physical or system key event. Does not return the updated UI dump; call get_ui_dump separately if needed.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
                     putJsonObject("keycode") { put("type", "string"); put("description", "Key name: HOME, BACK, ENTER, POWER, VOLUME_UP, VOLUME_DOWN, etc. Or numeric keycode as string.") }
@@ -334,8 +331,7 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
             val args = request.params.arguments ?: emptyMap()
             val keycode = args["keycode"]?.jsonPrimitive?.contentOrNull ?: ""
             val rawResult = adbObserver.pressKey(keycode)
-            val result = if (rawResult != null) UiDumpSummarizer.summarizeInteractable(rawResult) else null
-            CallToolResult(content = listOf(TextContent(result ?: "Error: Failed to press key")))
+            CallToolResult(content = listOf(TextContent(rawResult ?: "Error: Failed to press key")))
         }
 
         mcpServer.addTool(
@@ -348,7 +344,7 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "execute_adb_shell",
-            description = "Executes an adb shell command directly against the connected device. e.g. ls -l /sdcard",
+            description = "Executes an adb shell command directly against the connected device. If execution takes more than 1 second, it returns immediately with a task_id and status='running'. You must use shell_receive to check and fetch the output.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
                     putJsonObject("command") { put("type", "string"); put("description", "Shell command to execute") }
@@ -361,7 +357,27 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
             if (command.isEmpty()) {
                 CallToolResult(content = listOf(TextContent("Error: command parameter is required.")))
             } else {
-                val result = adbObserver.executeAdbShell(command)
+                val result = adbObserver.shellExecute(command)
+                CallToolResult(content = listOf(TextContent(result)))
+            }
+        }
+
+        mcpServer.addTool(
+            name = "shell_receive",
+            description = "Retrieves results of a background shell task started via execute_adb_shell.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("task_id") { put("type", "string"); put("description", "Task ID returned by execute_adb_shell") }
+                },
+                required = listOf("task_id")
+            )
+        ) { request ->
+            val args = request.params.arguments ?: emptyMap()
+            val taskId = args["task_id"]?.jsonPrimitive?.contentOrNull ?: ""
+            if (taskId.isEmpty()) {
+                CallToolResult(content = listOf(TextContent("Error: task_id parameter is required.")))
+            } else {
+                val result = adbObserver.shellReceive(taskId)
                 CallToolResult(content = listOf(TextContent(result)))
             }
         }
@@ -376,7 +392,7 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "open_settings",
-            description = "Opens a specific settings panel on the device.",
+            description = "Opens a specific settings panel on the device. Does not return the updated UI dump; call get_ui_dump separately if needed.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
                     putJsonObject("panel") { put("type", "string"); put("description", "Panel name: ROOT, SECURITY, WIFI, DEVELOPER, APP_DETAILS") }
@@ -392,8 +408,7 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
                 CallToolResult(content = listOf(TextContent("Error: panel parameter is required.")))
             } else {
                 val rawResult = adbObserver.openSettings(panel, packageName)
-                val result = if (rawResult != null) UiDumpSummarizer.summarizeInteractable(rawResult) else null
-                CallToolResult(content = listOf(TextContent(result ?: "Error: Failed to open settings.")))
+                CallToolResult(content = listOf(TextContent(rawResult ?: "Error: Failed to open settings.")))
             }
         }
 
@@ -559,7 +574,7 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
             routing {
                 val sseHandler: suspend io.ktor.server.sse.ServerSSESession.() -> Unit = {
                     val transport = SseServerTransport("/mcp/message", this)
-                    appViewModel.log("MCP", "New SSE connection. Sending endpoint: /mcp/message?sessionId=${transport.sessionId}")
+                    // appViewModel.log("MCP", "New SSE connection. Sending endpoint: /mcp/message?sessionId=${transport.sessionId}")
                     
                     // JetSkiから再接続(リロード)された際に、古いセッションが残っていると
                     // 後続の fallback POST がそちらを掴んでしまうバグを防ぐためクリアする

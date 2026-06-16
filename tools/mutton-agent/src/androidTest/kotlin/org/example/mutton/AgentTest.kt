@@ -216,7 +216,7 @@ class AgentTest {
             "get_ui_dump" -> {
                 val includeImage = json.optBoolean("include_image", false)
                 val qualityLevel = json.optInt("image_quality", 2)
-                device.waitForIdle()
+                device.waitForIdle(1000)
                 
                 var base64: String? = null
                 if (includeImage) {
@@ -256,7 +256,7 @@ class AgentTest {
                 Log.i("MuttonAgent", "Tapping at ($x, $y)")
                 val success = device.click(x, y)
                 if (success) {
-                    device.waitForIdle()
+                    device.waitForIdle(1000)
                     JSONObject().put("status", "ok")
                 } else {
                     createError("Failed to tap at ($x, $y)")
@@ -270,7 +270,7 @@ class AgentTest {
                 Log.i("MuttonAgent", "Swiping from ($startX, $startY) to ($endX, $endY)")
                 val success = device.swipe(startX, startY, endX, endY, 50)
                 if (success) {
-                    device.waitForIdle()
+                    device.waitForIdle(1000)
                     JSONObject().put("status", "ok")
                 } else {
                     createError("Failed to swipe")
@@ -287,7 +287,7 @@ class AgentTest {
                 if (pressEnter) {
                     device.pressKeyCode(android.view.KeyEvent.KEYCODE_ENTER)
                 }
-                device.waitForIdle()
+                device.waitForIdle(1000)
                 JSONObject().put("status", "ok")
             }
             "press_key" -> {
@@ -302,7 +302,7 @@ class AgentTest {
                         val process = Runtime.getRuntime().exec(arrayOf("input", "keyevent", keycodeStr))
                         process.waitFor()
                     }
-                    device.waitForIdle()
+                    device.waitForIdle(1000)
                     JSONObject().put("status", "ok")
                 } else {
                     createError("Empty keycode")
