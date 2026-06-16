@@ -107,7 +107,7 @@ Add the following to your `mcp_config.json` configuration file:
   "mcpServers": {
     "testbed-core": {
       "command": "python3",
-      "args": ["<<Path to application>>/scripts/mcp_stdio_bridge.py"]
+      "args": ["/path/to/testbed-core/scripts/mcp_stdio_bridge.py"]
     }
   }
 }
