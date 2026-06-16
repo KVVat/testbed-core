@@ -7,6 +7,11 @@
 *   **Understand Multiplatform Dependency Resolution:** In Kotlin Multiplatform projects, it is vital to understand how dependencies resolve between source sets (e.g., `commonMain`, `jvmMain`, `commonTest`). Adding dependencies to the wrong source set will trigger unexpected build failures.
 *   **Verify Build Cleanliness Before Handover:** Unless you are executing in an autonomous self-contained loop, always run a compilation check (such as `./gradlew assemble`) after code edits to ensure there are no compilation errors before returning control to the user.
 *   **Compose Desktop and `TextOverflow.Ellipsis`:** `androidx.compose.ui.text.font.TextOverflow.Ellipsis` might not be supported depending on the Compose Multiplatform version. Avoid using it in `jvmMain` environments, or implement an alternative text overflow truncation logic.
+*   **Preventing ADB Socket Hangs and Thread Freezes (Crucial)**:
+    Direct network-based commands through the Adam library (`adb.execute(ShellCommandRequest(...))`) rely on uninterruptible Java Socket I/O. If the device goes into a sleep/wake transition (especially during `press_key` with "POWER" or `get_device_state` query), the socket connection can hang indefinitely, ignoring coroutine timeouts like `withTimeoutOrNull`. To prevent this, critical commands must be wrapped or executed using OS-level process timeouts (`Process.waitFor(timeout, unit)` via a ProcessBuilder helper like `executeShellViaProcessBuilder` in `AdbObserver.kt`) to ensure control is always returned.
+*   **Non-Interruptible CLI Command Hangs**:
+    Executing commands that can block on network I/O or resolve infinitely (like `ping -c 3 google.com` inside `execute_adb_shell`) without process-level timeouts will leak background threads inside the Coroutine Dispatcher. If multiple blocked commands run, the Dispatcher pool will exhaust, resulting in complete MCP server freezes. Always ensure process-based timeouts are enforced for CLI executions.
+    *Note: Killing the host-side `adb` process with `Process.destroy()` will free up host-side thread resources, but the child process spawned inside the Android device shell (such as `ping`) may continue to run on the device as a zombie, consuming battery and CPU. Future architecture should address target-side process group signals.*
 
 ## 2. ADB Operations using Adam Library
 
@@ -96,6 +101,8 @@ Troubleshooting checklist for deploying mutton-agent to physical devices:
 *   **Non-Blocking Agent Execution (`am instrument`):** Starting tests via `am instrument` blocks the execution process until complete. If invoked through Adam, this holds Ktor connection response pools. Wrap it in a non-blocking coroutine `launch(Dispatchers.IO)` and verify agent presence through ping socket handshake instead.
 *   **JVM and `org.json` incompatibility:** Do not import `org.json.JSONObject` in shared code running on Compose Desktop. It will trigger `NoClassDefFoundError` due to classloader mismatch. Use `Gson` or `kotlinx.serialization` instead.
 *   **Debugging Output:** Avoid using raw `println()` inside Android agent logic. Instead, utilize `android.util.Log.i(TAG, message)` so traces can be properly routed through logcat.
+*   **Mutton Agent Processing Asynchronization (Fundamental Fix for UI Dump)**:
+    Implementing a two-phase async wrapper on the host side (`AdbObserver.kt`) is only a temporary workaround. If the `mutton-agent` (`AgentTest.kt` on the device) performs UI dumps or key actions synchronously, it still blocks the underlying ADB command execution and Ktor connections, leading to freezes in unconfigured LLM clients. The execution model inside `mutton-agent` must be fundamentally refactored to handle requests asynchronously (e.g., running the dump task in a background coroutine/thread on the device, returning immediately, and allowing the host to poll or receive the result via a separate non-blocking channel).
 
 ## 7. Direct MCP Connections
 

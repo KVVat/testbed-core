@@ -99,6 +99,7 @@ jobs:
 
 
           Copy-Item -Path "scripts/setup_tools.bat" -Destination "$OutDir\scripts\setup_tools.bat" -Force
+          Copy-Item -Path "scripts/mcp_stdio_bridge.py" -Destination "$OutDir\scripts\mcp_stdio_bridge.py" -Force
           Copy-Item -Path "pkg-items/testbed-windows.bat" -Destination "$OutDir\testbed-windows.bat" -Force
           Copy-Item -Path "pkg-items/README_WINDOWS.md" -Destination "$OutDir\README.md" -Force
 
@@ -121,9 +122,10 @@ jobs:
           
 
           cp scripts/setup_tools.sh "$out_dir/scripts/setup_tools.sh"
+          cp scripts/mcp_stdio_bridge.py "$out_dir/scripts/mcp_stdio_bridge.py"
           cp pkg-items/testbed-ubuntu.sh "$out_dir/testbed-ubuntu.sh"
           cp pkg-items/README_UBUNTU.md "$out_dir/README.md"
-          chmod +x "$out_dir/testbed-ubuntu.sh" "$out_dir/scripts/setup_tools.sh"
+          chmod +x "$out_dir/testbed-ubuntu.sh" "$out_dir/scripts/setup_tools.sh" "$out_dir/scripts/mcp_stdio_bridge.py"
           if [ -d "$out_dir/main-release/app/TestbedCore/bin" ]; then
             find "$out_dir/main-release/app/TestbedCore/bin" -type f -exec chmod +x {} +
           fi
@@ -145,6 +147,9 @@ jobs:
 
           cp -R "$app_bundle" "$out_dir/"
           cp pkg-items/README_MACOS.md "$out_dir/README.md"
+          mkdir -p "$out_dir/scripts"
+          cp scripts/mcp_stdio_bridge.py "$out_dir/scripts/mcp_stdio_bridge.py"
+          chmod +x "$out_dir/scripts/mcp_stdio_bridge.py"
           
 
           if [ -d "$out_dir/TestbedCore.app/Contents/MacOS" ]; then

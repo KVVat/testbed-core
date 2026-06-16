@@ -216,38 +216,67 @@ class AgentTest {
             "get_ui_dump" -> {
                 val includeImage = json.optBoolean("include_image", false)
                 val qualityLevel = json.optInt("image_quality", 2)
-                device.waitForIdle(1000)
                 
-                var base64: String? = null
-                if (includeImage) {
-                    val bitmap = instrumentation.uiAutomation.takeScreenshot()
-                    if (bitmap != null) {
-                        base64 = compressBitmap(bitmap, qualityLevel)
+                var resultJson = JSONObject()
+                val dumpThread = Thread {
+                    try {
+                        device.waitForIdle(1000)
+                        
+                        var base64: String? = null
+                        if (includeImage) {
+                            val bitmap = instrumentation.uiAutomation.takeScreenshot()
+                            if (bitmap != null) {
+                                base64 = compressBitmap(bitmap, qualityLevel)
+                            }
+                        }
+
+                        val activeNode = instrumentation.uiAutomation.rootInActiveWindow
+                        if (activeNode != null) {
+                            val rootNode = JsonUiDumper().dumpNodeRec(activeNode, 0)
+                            val jsonResponse = JSONObject()
+                                .put("type", "dump_result")
+                                .put("status", "ok")
+                                .put("output", Json.encodeToString(rootNode))
+                                .put("screen_width", device.displayWidth)
+                                .put("screen_height", device.displayHeight)
+                            if (base64 != null) {
+                                jsonResponse.put("screenshot", base64)
+                            }
+                            resultJson = jsonResponse
+                        } else {
+                            val jsonResponse = JSONObject()
+                                .put("type", "dump_result")
+                                .put("status", "ng")
+                                .put("message", "instrumentation.uiAutomation.rootInActiveWindow returned null. Active window might not be accessible.")
+                            if (base64 != null) {
+                                jsonResponse.put("screenshot", base64)
+                            }
+                            resultJson = jsonResponse
+                        }
+                    } catch (e: Exception) {
+                        resultJson = JSONObject()
+                            .put("type", "dump_result")
+                            .put("status", "error")
+                            .put("message", "Exception during dump: ${e.message}")
                     }
                 }
+                
+                dumpThread.start()
+                try {
+                    dumpThread.join(1000)
+                } catch (e: InterruptedException) {
+                    dumpThread.interrupt()
+                }
 
-                val activeNode = instrumentation.uiAutomation.rootInActiveWindow
-                if (activeNode != null) {
-                    val rootNode = JsonUiDumper().dumpNodeRec(activeNode, 0)
-                    val jsonResponse = JSONObject()
+                if (dumpThread.isAlive) {
+                    Log.w("MuttonAgent", "UI Dump timed out after 1000ms. Returning fallback timeout response.")
+                    dumpThread.interrupt()
+                    JSONObject()
                         .put("type", "dump_result")
-                        .put("status", "ok")
-                        .put("output", Json.encodeToString(rootNode))
-                        .put("screen_width", device.displayWidth)
-                        .put("screen_height", device.displayHeight)
-                    if (base64 != null) {
-                        jsonResponse.put("screenshot", base64)
-                    }
-                    jsonResponse
+                        .put("status", "timeout")
+                        .put("message", "UI Dump timed out on device after 1 second.")
                 } else {
-                    val jsonResponse = JSONObject()
-                        .put("type", "dump_result")
-                        .put("status", "ng")
-                        .put("message", "instrumentation.uiAutomation.rootInActiveWindow returned null. Active window might not be accessible.")
-                    if (base64 != null) {
-                        jsonResponse.put("screenshot", base64)
-                    }
-                    jsonResponse
+                    resultJson
                 }
             }
             "tap" -> {
@@ -309,12 +338,45 @@ class AgentTest {
                 }
             }
             "shell" -> {
-                val commandStr = json.getString("args") // 例: "ls -l /sdcard"
-                // Javaの標準機能でプロセス実行
-                val process = Runtime.getRuntime().exec(commandStr)
-                val output = process.inputStream.bufferedReader().use { it.readText() }
-                Log.i("MuttonAgent", "Shell output (first 30 chars): ${output.take(30)}")
-                JSONObject().put("status", "ok").put("output", output)
+                val commandStr = json.getString("args")
+                
+                var resultJson = JSONObject()
+                var process: Process? = null
+                val shellThread = Thread {
+                    try {
+                        process = Runtime.getRuntime().exec(commandStr)
+                        val output = process?.inputStream?.bufferedReader()?.use { it.readText() } ?: ""
+                        val errorOutput = process?.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                        
+                        val exitVal = process?.waitFor() ?: -1
+                        if (exitVal == 0) {
+                            resultJson = JSONObject().put("status", "ok").put("output", output)
+                        } else {
+                            resultJson = JSONObject().put("status", "failed")
+                                .put("exit_code", exitVal)
+                                .put("output", output)
+                                .put("error", errorOutput)
+                        }
+                    } catch (e: Exception) {
+                        resultJson = JSONObject().put("status", "error").put("message", e.message ?: "Execution failed")
+                    }
+                }
+                
+                shellThread.start()
+                try {
+                    shellThread.join(8000)
+                } catch (e: InterruptedException) {
+                    shellThread.interrupt()
+                }
+
+                if (shellThread.isAlive) {
+                    Log.w("MuttonAgent", "Shell command timed out on device: $commandStr. Destroying process.")
+                    process?.destroy()
+                    shellThread.interrupt()
+                    JSONObject().put("status", "timeout").put("message", "Command timed out on device after 8 seconds.")
+                } else {
+                    resultJson
+                }
             }
             "exit" -> {
                 // プロセス終了用

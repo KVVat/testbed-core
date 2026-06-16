@@ -96,7 +96,7 @@ TestBed Core exposes its device control and test execution APIs as a Model Conte
 
 While TestBed Core runs an SSE (Server-Sent Events) network server at `http://localhost:11452/mcp` on port 11452, direct HTTP/SSE connections from LLM agents (like Antigravity) can sometimes suffer from network socket hangs or polling delays.
 
-To resolve this, we provide a **Stdio-to-SSE Bridge** script: `scripts/mcp_stdio_bridge.py`. This script starts a stable, local Stdio channel for the LLM agent and proxies all JSON-RPC requests to the background Ktor SSE server.
+To resolve this, we provide a **Stdio-to-SSE Bridge** script: `scripts/mcp_stdio_bridge.py` (which is bundled inside the released packages under the `scripts/` directory). This script starts a stable, local Stdio channel for the LLM agent and proxies all JSON-RPC requests to the background Ktor SSE server.
 
 #### How to configure in Antigravity / Cline
 
@@ -107,7 +107,7 @@ Add the following to your `mcp_config.json` configuration file:
   "mcpServers": {
     "testbed-core": {
       "command": "python3",
-      "args": ["/Users/wkouki/AndroidStudioProjects/testbed-core/scripts/mcp_stdio_bridge.py"]
+      "args": ["<<Path to application>>/scripts/mcp_stdio_bridge.py"]
     }
   }
 }

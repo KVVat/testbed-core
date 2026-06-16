@@ -1109,14 +1109,49 @@ class AdbObserver(private val scope: CoroutineScope) {
             activeShellTasks[taskId] = task
             
             val realJob = scope.launch(Dispatchers.IO) {
+                var proc: Process? = null
                 try {
-                    val response = adb.adb.execute(ShellCommandRequest(command), serial)
-                    task.appendStdout(response.output)
-                    task.exitCode = response.exitCode
+                    proc = ProcessBuilder("adb", "-s", serial, "shell", command)
+                        .redirectErrorStream(false)
+                        .start()
+                    task.process = proc
+
+                    val stdoutReader = launch(Dispatchers.IO) {
+                        try {
+                            proc.inputStream.bufferedReader().use { reader ->
+                                var line: String?
+                                while (reader.readLine().also { line = it } != null) {
+                                    task.appendStdout(line + "\n")
+                                }
+                            }
+                        } catch (_: Exception) {}
+                    }
+                    val stderrReader = launch(Dispatchers.IO) {
+                        try {
+                            proc.errorStream.bufferedReader().use { reader ->
+                                var line: String?
+                                while (reader.readLine().also { line = it } != null) {
+                                    task.appendStderr(line + "\n")
+                                }
+                            }
+                        } catch (_: Exception) {}
+                    }
+
+                    val completed = proc.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)
+                    if (completed) {
+                        stdoutReader.join()
+                        stderrReader.join()
+                        task.exitCode = proc.exitValue()
+                    } else {
+                        proc.destroyForcibly()
+                        task.appendStderr("Error: Command timed out after 10 seconds.")
+                        task.exitCode = -1
+                    }
                 } catch (e: Exception) {
                     task.appendStderr(e.message ?: "Execution failed")
                     task.exitCode = -1
                 } finally {
+                    proc?.destroy()
                     task.isCompleted = true
                 }
             }
@@ -1679,7 +1714,8 @@ data class AdbState(
 class ShellTask(
     val id: String,
     val command: String,
-    var job: kotlinx.coroutines.Job
+    var job: kotlinx.coroutines.Job,
+    var process: Process? = null
 ) {
     private val stdoutLock = Any()
     private val stderrLock = Any()
