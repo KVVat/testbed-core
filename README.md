@@ -107,7 +107,7 @@ Add the following to your `mcp_config.json` configuration file:
   "mcpServers": {
     "testbed-core": {
       "command": "python3",
-      "args": ["/Users/wkouki/AndroidStudioProjects/testbed-core/scripts/mcp_stdio_bridge.py"]
+      "args": ["/Users/xxx/AndroidStudioProjects/testbed-core/scripts/mcp_stdio_bridge.py"]
     }
   }
 }
