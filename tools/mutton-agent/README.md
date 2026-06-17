@@ -1,94 +1,203 @@
-# mutton-agent
+# Mutton Agent
 
-Androidの実機およびエミュレータ上で動作し、UiDeviceを用いたUIダンプや各種コマンドを実行するためのAgentです。
-以前は `app_process` 経由で動作するDexファイルとして実装されていましたが、現在は `UiAutomator(UiDevice)` を利用するため、**Android Instrumentation Test** として実装されています。
+Mutton Agent is an Android test automation helper that runs directly on target devices (physical or emulator) as an **Android Instrumentation Test**. It leverages `UiAutomator` (`UiDevice`) to query UI layout hierarchies, simulate user interface interactions, and stream data to the host.
 
-## ビルド方法
+Unlike standard standalone binaries, running as an instrumentation test allows Mutton Agent to bypass severe OS-level permissions restrictions and directly capture system UI and secure screenshots.
 
-ルートディレクトリから以下のGradleコマンドを実行することで、Test APKのコンパイルおよび配置を行います。
+## Building and Packaging
+
+Compile and copy the test APK to the host application's resources directory using the following command from the project root:
 
 ```bash
 ./gradlew -p tools/mutton-agent copyTestApk
 ```
 
-このコマンドは `assembleDebugAndroidTest` を実行し、生成された `mutton-agent-debug-androidTest.apk` を `testbed-core/composeApp/resources/mutton-agent-androidTest.apk` にコピーします。
+This task compiles the instrumentation APK and copies it to `composeApp/src/jvmMain/resources/mutton-agent-androidTest.apk` for the host app to deployment.
 
-## 実行方法 (Android端末上)
+## Deployment & Execution
 
-1. **APKのインストール**
-   あらかじめ生成された `mutton-agent-androidTest.apk` を対象端末に `adb install` しておくか、または適宜デプロイしてください。(※フレームワーク側で自動的に Push および Install を行うことを想定しています)
+TestBed Core's host application automates the deployment loop. If you want to deploy and run it manually:
 
-2. **Instrumentコマンドの起動**
-   以下のコマンドにより、テストとしてエージェントを起動します。(フォアグラウンドで常駐し、ソケットサーバーを立ち上げます)
+1. **Install the APK**
+   ```bash
+   adb install -r -t mutton-agent-androidTest.apk
+   ```
 
+2. **Launch the Instrumentation Server**
+   Start the instrumentation runner in blocking mode. This starts an abstract socket server on the device:
    ```bash
    adb shell am instrument -w org.example.mutton.test/androidx.test.runner.AndroidJUnitRunner
    ```
 
-## 通信仕様
+---
 
-- エージェントは `LocalServerSocket` を利用して `mutton_agent` という名前の Abstract Namespace ソケットで待ち受けを行っています。
-- ホストPCからは `adb forward` などを利用してここに接続し、JSON形式のコマンドを送受信します。
+## Communication Protocol
 
-### 基本コマンド一覧
+Mutton Agent listens for connections on a Linux abstract namespace socket named **`mutton_agent`**.
+The host PC forwards a port to this socket (e.g. `adb forward tcp:PORT localabstract:mutton_agent`) and exchanges JSON-RPC commands.
+
+### Available Command Schema
 
 #### `ping`
-生存確認を行います。
-```json
-{"cmd": "ping"}
-```
-レスポンス:
-```json
-{"status": "pong", "message": "I am alive!"}
-```
+Verify connection health.
+* Request:
+  ```json
+  {"cmd": "ping"}
+  ```
+* Response:
+  ```json
+  {"status": "pong", "message": "I am alive!"}
+  ```
 
-#### `dump`
-現在のUIツリーを1回だけ取得します。同時に画面のスクリーンショットも取得し、Base64エンコードして返します。
-```json
-{"cmd": "dump"}
-```
-レスポンス:
-```json
-{"type": "dump_result", "status": "ok", "output": "{...ダンプデータ...}", "screenshot": "<Base64エンコードされたJPEG画像>"}
-```
+#### `version`
+Get agent build and runtime information.
+* Request:
+  ```json
+  {"cmd": "version"}
+  ```
+* Response:
+  ```json
+  {"status": "ok", "version": "1.0.0(build_timestamp)"}
+  ```
+
+#### `get_ui_dump`
+Retrieve the current UI layout tree. Supports optional screenshot capture.
+* Request:
+  ```json
+  {
+    "cmd": "get_ui_dump",
+    "include_image": true,
+    "image_quality": 4
+  }
+  ```
+  * `include_image` (boolean, optional, default `false`): Capture screenshot.
+  * `image_quality` (int, optional, default `2`): Screen compression level (1-4).
+* Response:
+  ```json
+  {
+    "type": "dump_result",
+    "status": "ok",
+    "output": "[UiNode JSON String]",
+    "screen_width": 1080,
+    "screen_height": 2424,
+    "screenshot": "[Base64 JPEG String]" (optional)
+  }
+  ```
+
+#### `tap`
+Perform a click action at the specified coordinate.
+* Request:
+  ```json
+  {
+    "cmd": "tap",
+    "x": 540,
+    "y": 1200
+  }
+  ```
+* Response:
+  ```json
+  {"status": "ok"}
+  ```
+
+#### `swipe`
+Perform a drag gesture.
+* Request:
+  ```json
+  {
+    "cmd": "swipe",
+    "start_x": 100,
+    "start_y": 500,
+    "end_x": 100,
+    "end_y": 100
+  }
+  ```
+* Response:
+  ```json
+  {"status": "ok"}
+  ```
+
+#### `input_text`
+Type text into the active text field.
+* Request:
+  ```json
+  {
+    "cmd": "input_text",
+    "text": "Hello World",
+    "press_enter": true
+  }
+  ```
+* Response:
+  ```json
+  {"status": "ok"}
+  ```
+
+#### `press_key`
+Simulate a hardware key press.
+* Request:
+  ```json
+  {
+    "cmd": "press_key",
+    "keycode": "BACK"
+  }
+  ```
+  * `keycode` can be standard Android KeyEvent keycode names (e.g., `"BACK"`, `"HOME"`, `"ENTER"`, `"MENU"`).
+* Response:
+  ```json
+  {"status": "ok"}
+  ```
 
 #### `shell`
-AndroidシェルコマンドをJavaプロセス上で実行します。
-```json
-{"cmd": "shell", "args": "ls -l /sdcard"}
-```
+Execute a local shell command on the device (limited to runner permissions).
+* Request:
+  ```json
+  {
+    "cmd": "shell",
+    "args": "pm list packages"
+  }
+  ```
+* Response:
+  ```json
+  {
+    "status": "completed",
+    "exit_code": 0,
+    "stdout": "...",
+    "stderr": "..."
+  }
+  ```
 
 #### `start_stream` / `stop_stream`
-画面ストリーミング（スクリーンショットの連続取得）を独立したスレッドで開始・停止します。
-`fps` は小数点指定が可能です（例: 1.0 = 1秒に1枚）。
-```json
-{"cmd": "start_stream", "fps": 1.0}
-```
-ストリーム中のレスポンス（継続的に送られてきます）:
-```json
-{"type": "stream_frame", "data": "<Base64エンコードされたJPEG画像>"}
-```
-停止:
-```json
-{"cmd": "stop_stream"}
-```
+Stream base64 screenshots continuously down the active connection.
+* Request:
+  ```json
+  {
+    "cmd": "start_stream",
+    "fps": 1.0,
+    "image_quality": 2
+  }
+  ```
+* Stream Output:
+  ```json
+  {"type": "stream_frame", "data": "[Base64 JPEG]"}
+  ```
+* Stop:
+  ```json
+  {"cmd": "stop_stream"}
+  ```
 
 #### `start_dump_stream` / `stop_dump_stream`
-UIツリーダンプのストリーミングを独立したスレッドで開始・停止します。負荷が高いため低fps（0.5など）を推奨します。
-```json
-{"cmd": "start_dump_stream", "fps": 0.5}
-```
-ストリーム中のレスポンス（継続的に送られてきます）:
-```json
-{"type": "dump_stream_frame", "data": "{...ダンプデータ(文字列)...}"}
-```
-停止:
-```json
-{"cmd": "stop_dump_stream"}
-```
-
-#### `exit`
-エージェントプロセスを終了します。
-```json
-{"cmd": "exit"}
-```
+Stream UI hierarchy trees continuously down the active connection.
+* Request:
+  ```json
+  {
+    "cmd": "start_dump_stream",
+    "fps": 0.5
+  }
+  ```
+* Stream Output:
+  ```json
+  {"type": "dump_stream_frame", "data": "[UiNode JSON String]"}
+  ```
+* Stop:
+  ```json
+  {"cmd": "stop_dump_stream"}
+  ```

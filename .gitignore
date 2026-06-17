@@ -46,6 +46,7 @@ bin/
 composeApp/plugins
 composeApp/screenshots
 composeApp/saved_layouts
+composeApp/ui_artifacts
 results/
 xml-patches/
 composeApp/*.properties
