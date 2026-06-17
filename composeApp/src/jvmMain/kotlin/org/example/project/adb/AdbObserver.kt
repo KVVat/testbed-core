@@ -270,7 +270,8 @@ class AdbObserver(private val scope: CoroutineScope) {
                 val serial = adb.deviceSerial
                 val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
                 val remotePath = "/sdcard/screenshot_tmp.png"
-                val localDir = File("screenshots")
+                val base = JUnitBridge.baseDir ?: "."
+                val localDir = File(base, "screenshots")
                 if (!localDir.exists()) localDir.mkdirs()
                 val localFile = File(localDir, "screenshot_$timestamp.png")
 
@@ -1202,7 +1203,7 @@ class AdbObserver(private val scope: CoroutineScope) {
         }
     }
 
-    suspend fun uiDumpExecute(format: String, includeImage: Boolean = false, quality: Int = 2): String {
+    suspend fun uiDumpExecute(format: String, includeImage: Boolean = false, quality: Int = 2, tag: String? = null): String {
         if (!adbState.value.isValid) return "{\"status\":\"error\",\"message\":\"No device connected.\"}"
 
         return withContext(Dispatchers.IO) {
@@ -1215,12 +1216,39 @@ class AdbObserver(private val scope: CoroutineScope) {
                 try {
                     val rawResult = dumpMuttonAgent(includeImage, quality, silent = true)
                     if (rawResult != null) {
+                        var createdUuid: String? = null
+                        try {
+                            val gson = Gson()
+                            val dumpResult = gson.fromJson(rawResult, org.example.project.model.DumpResult::class.java)
+                            if (dumpResult != null && dumpResult.status == "ok") {
+                                createdUuid = org.example.project.model.LayoutDatabase.saveLayoutArtifact(
+                                    jsonLayout = dumpResult.output,
+                                    screenshotBase64 = dumpResult.screenshot,
+                                    tag = tag
+                                )
+                            }
+                        } catch (e: Exception) {
+                            System.err.println("[MCP] Failed to save layout artifact during dump execute: ${e.message}")
+                        }
+
                         val processed = if (format == "summary") {
                             UiDumpSummarizer.summarizeInteractable(rawResult)
                         } else {
                             rawResult
                         }
-                        task.output = processed
+
+                        val finalOutput = if (createdUuid != null) {
+                            val injectJson = if (tag != null) {
+                                "\n\n[Artifact metadata -> uuid: $createdUuid, tag: $tag]"
+                            } else {
+                                "\n\n[Artifact metadata -> uuid: $createdUuid]"
+                            }
+                            processed + injectJson
+                        } else {
+                            processed
+                        }
+
+                        task.output = finalOutput
                         task.isCompleted = true
                     } else {
                         task.isFailed = true

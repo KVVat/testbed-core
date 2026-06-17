@@ -60,6 +60,7 @@ kotlin {
             implementation(libs.ktor.server.cio)
             implementation(libs.ktor.server.cors)
             implementation(libs.mcp.kotlin.sdk)
+            implementation(libs.sqlite)
         }
     }
 }

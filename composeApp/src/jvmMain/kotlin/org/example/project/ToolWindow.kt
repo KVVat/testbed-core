@@ -104,6 +104,61 @@ fun ToolWindow(viewModel: ToolViewModel, onCloseRequest: () -> Unit) {
         undecorated = true,
         transparent = !isWindows
     ) {
+        val awtWindow = this.window
+        LaunchedEffect(awtWindow) {
+            val dropTarget = java.awt.dnd.DropTarget(null, object : java.awt.dnd.DropTargetAdapter() {
+                override fun dragEnter(dtde: java.awt.dnd.DropTargetDragEvent) {
+                    if (viewModel.selectedTab.value == 2) {
+                        dtde.acceptDrag(java.awt.dnd.DnDConstants.ACTION_COPY)
+                    } else {
+                        dtde.rejectDrag()
+                    }
+                }
+
+                override fun dragOver(dtde: java.awt.dnd.DropTargetDragEvent) {
+                    if (viewModel.selectedTab.value == 2) {
+                        dtde.acceptDrag(java.awt.dnd.DnDConstants.ACTION_COPY)
+                    } else {
+                        dtde.rejectDrag()
+                    }
+                }
+
+                override fun drop(dtde: java.awt.dnd.DropTargetDropEvent) {
+                    if (viewModel.selectedTab.value == 2) {
+                        try {
+                            dtde.acceptDrop(java.awt.dnd.DnDConstants.ACTION_COPY)
+                            val transferable = dtde.transferable
+                            if (transferable.isDataFlavorSupported(java.awt.datatransfer.DataFlavor.javaFileListFlavor)) {
+                                @Suppress("UNCHECKED_CAST")
+                                val files = transferable.getTransferData(java.awt.datatransfer.DataFlavor.javaFileListFlavor) as? List<File>
+                                if (files != null) {
+                                    files.forEach { file ->
+                                        println("[SYSTEM] INFO: Dropped file to push: ${file.absolutePath}")
+                                    }
+                                    viewModel.pushDroppedFiles(files)
+                                }
+                            }
+                        } catch (e: Exception) {
+                            System.err.println("[SYSTEM] ERROR: Failed to process dropped files: ${e.message}")
+                            e.printStackTrace()
+                        }
+                    }
+                }
+            })
+
+            fun attachDropTarget(component: java.awt.Component) {
+                component.dropTarget = dropTarget
+                if (component is java.awt.Container) {
+                    component.components.forEach { attachDropTarget(it) }
+                }
+            }
+
+            attachDropTarget(awtWindow)
+            if (awtWindow is javax.swing.JFrame) {
+                awtWindow.contentPane?.let { attachDropTarget(it) }
+            }
+        }
+
         MaterialTheme(colorScheme = darkColorScheme()) {
             Surface(
                 modifier = Modifier
@@ -284,38 +339,44 @@ fun ToolWindow(viewModel: ToolViewModel, onCloseRequest: () -> Unit) {
 
                 // --- 右側: メインコンテンツ ---
                 Column(modifier = Modifier.weight(1f)) {
+                    val snackbarHostState = remember { SnackbarHostState() }
                     
-                    // タブエリア
-                    TabRow(
-                        selectedTabIndex = selectedTab,
-                        containerColor = Color(0xFF2B2D30),
-                        contentColor = Color.White,
-                        indicator = { tabPositions ->
-                            TabRowDefaults.Indicator(
-                                modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
-                                color = Color(0xFF569CD6)
-                            )
+                    LaunchedEffect(Unit) {
+                        viewModel.snackbarMessage.collect { msg ->
+                            snackbarHostState.showSnackbar(msg)
                         }
-                    ) {
-                        Tab(
-                            selected = selectedTab == 0,
-                            onClick = { viewModel.setTab(0) },
-                            icon = { Icon(Icons.AutoMirrored.Filled.Notes, contentDescription = null) },
-                            text = { Text("Logcat") }
-                        )
-                        Tab(
-                            selected = selectedTab == 1,
-                            onClick = { viewModel.setTab(1) },
-                            icon = { Icon(Icons.Default.AccountTree, contentDescription = null) },
-                            text = { Text("UI Inspector") }
-                        )
-                        Tab(
-                            selected = selectedTab == 2,
-                            onClick = { viewModel.setTab(2) },
-                            icon = { Icon(Icons.Default.FolderOpen, contentDescription = null) },
-                            text = { Text("File Explorer") }
-                        )
                     }
+
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            // タブエリア
+                            TabRow(
+                                selectedTabIndex = selectedTab,
+                                containerColor = Color(0xFF2B2D30),
+                                contentColor = Color.White,
+                                indicator = { tabPositions ->
+                                    TabRowDefaults.Indicator(
+                                        modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
+                                        color = Color(0xFF569CD6)
+                                    )
+                                }
+                            ) {
+                                Tab(
+                                    selected = selectedTab == 0,
+                                    onClick = { viewModel.setTab(0) },
+                                    text = { Text("Logcat") }
+                                )
+                                Tab(
+                                    selected = selectedTab == 1,
+                                    onClick = { viewModel.setTab(1) },
+                                    text = { Text("UI Inspector") }
+                                )
+                                Tab(
+                                    selected = selectedTab == 2,
+                                    onClick = { viewModel.setTab(2) },
+                                    text = { Text("File Explorer") }
+                                )
+                            }
 
                     if (selectedTab == 0) {
                         // 上部: フィルタリングバー
@@ -374,20 +435,18 @@ fun ToolWindow(viewModel: ToolViewModel, onCloseRequest: () -> Unit) {
                         )
                     } else if (selectedTab == 1) {
                         // UI Inspector ツール
-                        UiInspectorPane(
-                            rootNode = uiDumpRoot,
-                            screenshot = uiDumpScreenshot,
-                            screenWidth = uiDumpScreenWidth,
-                            screenHeight = uiDumpScreenHeight,
-                            timelineItems = timelineItems,
-                            selectedTimelineIndex = selectedTimelineIndex,
-                            onSelectTimelineIndex = { item -> viewModel.selectTimelineItem(item) },
-                            onPerformTap = { node -> viewModel.performTap(node) }
-                        )
+                        UiInspectorPane(viewModel = viewModel)
                     } else {
                         // File Explorer Pane
                         FileExplorerPane(viewModel)
-                    }
+                    } // end else
+                } // end Column
+
+                        SnackbarHost(
+                            hostState = snackbarHostState,
+                            modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp)
+                        )
+                    } // end Box
                 } // end right column
             } // end Row
             } // end Column

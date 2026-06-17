@@ -64,20 +64,16 @@ STATIC_TOOLS = [
         }
     },
     {
-        "name": "start_stream",
-        "description": "Start screenshot stream. Optional parameters: 'fps' (Float, default 1.0) and 'image_quality' (Int: 1=100% size/80% jpeg, 2=50% size/50% jpeg, 3=33% size/33% jpeg, 4=25% size/20% jpeg. Default is 2).",
+        "name": "get_screen_dump",
+        "description": "Retrieves the current UI hierarchy and a mandatory screenshot. Default format is 'summary' (LLM-optimized text) or 'json' (raw tree). Saves the layout and image internally to history DB.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "fps": {"type": "number", "description": "Frames per second. Default 1.0"},
-                "image_quality": {"type": "integer", "description": "1=100%/80%jpeg, 2=50%/50%jpeg, 3=33%/33%jpeg, 4=25%/20%jpeg. Default 2"}
+                "image_quality": {"type": "integer", "description": "1=100%, 2=50%, 3=33%, 4=25%. Default 4 (25%)"},
+                "tag": {"type": "string", "description": "Optional custom string key to tag the saved screen layout."},
+                "format": {"type": "string", "description": "Output format: 'summary' (default) or 'json'"}
             }
         }
-    },
-    {
-        "name": "stop_stream",
-        "description": "Stop screenshot stream",
-        "inputSchema": {"type": "object", "properties": {}}
     },
     {
         "name": "ping",
@@ -92,7 +88,8 @@ STATIC_TOOLS = [
             "properties": {
                 "format": {"type": "string", "description": "Output format: 'summary' (compact flat list, default) or 'json' (full tree)"},
                 "include_image": {"type": "boolean", "description": "Include screenshot. Default false"},
-                "image_quality": {"type": "integer", "description": "1=100%, 2=50%, 3=33%, 4=25%. Default 4 (25%)"}
+                "image_quality": {"type": "integer", "description": "1=100%, 2=50%, 3=33%, 4=25%. Default 4 (25%)"},
+                "tag": {"type": "string", "description": "Optional custom string key to tag the saved layout in history registry."}
             }
         }
     },
@@ -105,6 +102,19 @@ STATIC_TOOLS = [
                 "task_id": {"type": "string", "description": "The task ID returned by get_ui_dump"}
             },
             "required": ["task_id"]
+        }
+    },
+    {
+        "name": "get_ui_dump_history",
+        "description": "Retrieves a historical UI layout dump by UUID, Tag, or latest relative Index.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "uuid": {"type": "string", "description": "Query layout directly by its unique UUID (Highest precedence)"},
+                "tag": {"type": "string", "description": "Retrieve the latest layout saved with this tag (Second precedence)"},
+                "index": {"type": "integer", "description": "Relative index offset from latest. 0 = latest, 1 = 1-step-back, etc. (Default 0)"},
+                "format": {"type": "string", "description": "Format option: 'summary' (optimized, default) or 'json' (raw)"}
+            }
         }
     },
     {
@@ -252,11 +262,6 @@ STATIC_TOOLS = [
             },
             "required": ["package_name"]
         }
-    },
-    {
-        "name": "clear_logcat",
-        "description": "Clears the device's Logcat buffer (adb logcat -c).",
-        "inputSchema": {"type": "object", "properties": {}}
     },
     {
         "name": "get_logcat",

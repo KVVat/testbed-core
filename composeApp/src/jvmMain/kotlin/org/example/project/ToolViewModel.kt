@@ -8,7 +8,10 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import org.example.project.adb.AdbRepository
 import org.example.project.adb.LogEvent
 import org.example.project.adb.AdbFile
@@ -28,6 +31,15 @@ import com.google.gson.Gson
 import org.jetbrains.skia.Image
 import java.util.Base64
 
+
+data class LayoutHistoryItem(
+    val timestamp: String,
+    val jsonFile: File,
+    val pngFile: File?,
+    val displayTime: String,
+    val uuid: String,
+    val tag: String?
+)
 
 class ToolViewModel : ViewModel(), KoinComponent {
     private val adbRepository: AdbRepository by inject()
@@ -69,6 +81,62 @@ class ToolViewModel : ViewModel(), KoinComponent {
 
     private val _uiDumpScreenshot = MutableStateFlow<ImageBitmap?>(null)
     val uiDumpScreenshot = _uiDumpScreenshot.asStateFlow()
+
+    private val _inspectorMode = MutableStateFlow(0) // 0: Touch/Tap, 1: Select Area, 2: History
+    val inspectorMode = _inspectorMode.asStateFlow()
+    private val _uiDumpLoadingState = MutableStateFlow("Waiting for automatic polling...")
+    val uiDumpLoadingState = _uiDumpLoadingState.asStateFlow()
+    private val _activeLayoutTime = MutableStateFlow("")
+    val activeLayoutTime = _activeLayoutTime.asStateFlow()
+
+    fun openSavedLayoutsFolder() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val savedDir = File(baseDir, "saved_layouts")
+            if (!savedDir.exists()) {
+                savedDir.mkdirs()
+            }
+            try {
+                if (java.awt.Desktop.isDesktopSupported()) {
+                    java.awt.Desktop.getDesktop().open(savedDir)
+                } else {
+                    log("SYSTEM", "Desktop is not supported on this platform", LogLevel.WARN)
+                }
+            } catch (e: Exception) {
+                log("SYSTEM", "Failed to open saved layouts directory: ${e.message}", LogLevel.ERROR)
+            }
+        }
+    }
+
+    fun openUiInspector() {
+        openWindow()
+        setTab(1)
+    }
+    fun setInspectorMode(mode: Int) {
+        val prev = _inspectorMode.value
+        _inspectorMode.value = mode
+        if (mode == 0 && prev != 0) {
+            log("Agent", "Swapping back to Interaction mode: forcing active UI dump fetch", LogLevel.INFO)
+            viewModelScope.launch {
+                dumpMuttonAgent(silent = true, force = true)
+            }
+        }
+    }
+
+    private val _showSimpleTree = MutableStateFlow(true)
+    val showSimpleTree = _showSimpleTree.asStateFlow()
+
+    fun toggleSimpleTree() {
+        _showSimpleTree.value = !_showSimpleTree.value
+    }
+
+    private val _snackbarMessage = kotlinx.coroutines.flow.MutableSharedFlow<String>()
+    val snackbarMessage = _snackbarMessage.asSharedFlow()
+
+    fun showSnackbar(message: String) {
+        viewModelScope.launch {
+            _snackbarMessage.emit(message)
+        }
+    }
 
     private val _uiDumpScreenWidth = MutableStateFlow(1080)
     val uiDumpScreenWidth = _uiDumpScreenWidth.asStateFlow()
@@ -121,6 +189,7 @@ class ToolViewModel : ViewModel(), KoinComponent {
                     }
                 } else if (!state.isValid) {
                     stopLogcat()
+                    _uiDumpLoadingState.value = "Device disconnected. Checking connection..."
                 }
             }
         }
@@ -142,6 +211,11 @@ class ToolViewModel : ViewModel(), KoinComponent {
         if (_selectedTab.value == 1) {
             startUiPolling()
         }
+    }
+
+    fun openFileExplorer() {
+        _selectedTab.value = 2
+        openWindow()
     }
 
     fun closeWindow() {
@@ -236,11 +310,13 @@ class ToolViewModel : ViewModel(), KoinComponent {
         }
     }
 
-    fun dumpMuttonAgent(silent: Boolean = false) {
+    fun dumpMuttonAgent(silent: Boolean = false, force: Boolean = false) {
         viewModelScope.launch {
+            _uiDumpLoadingState.value = "Fetching layout from mutton-agent..."
             val response = adbRepository.dumpMuttonAgent(includeImage = true, silent = silent)
             if (response != null && response.isNotEmpty()) {
                 try {
+                    _uiDumpLoadingState.value = "Processing layout and screenshot..."
                     val gson = Gson()
                     val dumpResult = gson.fromJson(response, DumpResult::class.java)
                     if (dumpResult != null && dumpResult.status == "ok") {
@@ -248,7 +324,7 @@ class ToolViewModel : ViewModel(), KoinComponent {
                         val newScreenshot = dumpResult.screenshot ?: ""
 
                         val lastItem = _timelineItems.value.lastOrNull() as? TimelineItem.Record
-                        val hasChange = lastItem == null || lastItem.snapshot.jsonDump != newJsonDump
+                        val hasChange = force || lastItem == null || lastItem.snapshot.jsonDump != newJsonDump
 
                         lastRawScreenshotBase64 = newScreenshot // Cache raw screenshot
 
@@ -277,11 +353,18 @@ class ToolViewModel : ViewModel(), KoinComponent {
                         // If state changed or first load, sync active view components
                         if (hasChange) {
                             updateActiveSnapshot(snapshot, dumpResult.screen_width, dumpResult.screen_height)
+                            saveArtifact(newScreenshot, newJsonDump)
                         }
+                        _uiDumpLoadingState.value = "Waiting for automatic polling..."
+                    } else {
+                        _uiDumpLoadingState.value = "Failed to fetch UI dump. Retrying..."
                     }
                 } catch (e: Exception) {
-                    // Handle parse error
+                    log("Agent", "Failed to parse dump response: ${e.message}", LogLevel.ERROR)
+                    _uiDumpLoadingState.value = "Failed to parse UI dump. Retrying..."
                 }
+            } else {
+                _uiDumpLoadingState.value = "Failed to fetch UI dump. Retrying..."
             }
         }
     }
@@ -344,6 +427,68 @@ class ToolViewModel : ViewModel(), KoinComponent {
         }
     }
 
+    fun performCoordinateTap(x: Int, y: Int) {
+        viewModelScope.launch {
+            log("Agent", "Simulating tap at coordinate ($x, $y)", LogLevel.INFO)
+            val response = adbRepository.tapCoordinate(x, y)
+
+            if (response != null && response.isNotEmpty()) {
+                try {
+                    val gson = Gson()
+                    val dumpResult = gson.fromJson(response, DumpResult::class.java)
+                    if (dumpResult != null && dumpResult.status == "ok") {
+                        val afterTimestamp = System.currentTimeMillis()
+                        val afterJsonDump = dumpResult.output
+                        val afterScreenshot = dumpResult.screenshot ?: ""
+
+                        lastRawScreenshotBase64 = afterScreenshot
+
+                        val afterSnapshot = Snapshot(
+                            timestamp = afterTimestamp,
+                            jsonDump = afterJsonDump,
+                            screenshotBase64 = afterScreenshot
+                        )
+
+                        val newRecord = TimelineItem.Record(
+                            id = "rec_$afterTimestamp",
+                            timestamp = afterTimestamp,
+                            snapshot = afterSnapshot,
+                            hasChange = true,
+                            eventLabel = "Tap",
+                            actionDetails = ActionDetails(
+                                command = "tap",
+                                args = mapOf("x" to x, "y" to y)
+                            )
+                        )
+
+                        val currentList = _timelineItems.value.toMutableList()
+                        currentList.add(newRecord)
+                        if (currentList.size > 36) {
+                            currentList.removeAt(0)
+                        }
+                        _timelineItems.value = currentList
+                        _selectedTimelineIndex.value = currentList.size - 1
+
+                        updateActiveSnapshot(afterSnapshot, dumpResult.screen_width, dumpResult.screen_height)
+                        saveArtifact(afterScreenshot, afterJsonDump)
+                    }
+                } catch (e: Exception) {
+                    log("Agent", "Failed to parse coordinate tap response: ${e.message}", LogLevel.ERROR)
+                }
+            }
+        }
+    }
+
+    private fun saveArtifact(screenshotBase64: String, jsonLayout: String) {
+        val uuid = org.example.project.model.LayoutDatabase.saveLayoutArtifact(
+            jsonLayout = jsonLayout,
+            screenshotBase64 = screenshotBase64.ifEmpty { null },
+            tag = null
+        )
+        log("SYSTEM", "Auto-saved layout artifact (UUID: $uuid)", LogLevel.INFO)
+        loadLayoutHistory()
+    }
+
     fun selectTimelineItem(item: TimelineItem) {
         val record = item as? TimelineItem.Record ?: return
         if (!record.hasChange) return // Disallow selecting linear time line points that have no changes
@@ -364,6 +509,9 @@ class ToolViewModel : ViewModel(), KoinComponent {
             _uiDumpScreenWidth.value = screenWidth
             _uiDumpScreenHeight.value = screenHeight
 
+            val timeFormatter = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+            _activeLayoutTime.value = timeFormatter.format(java.util.Date(snapshot.timestamp))
+
             if (snapshot.screenshotBase64.isNotEmpty()) {
                 val bytes = Base64.getDecoder().decode(snapshot.screenshotBase64)
                 val skiaImage = Image.makeFromEncoded(bytes)
@@ -373,6 +521,129 @@ class ToolViewModel : ViewModel(), KoinComponent {
             }
         } catch (e: Exception) {
             _uiDumpScreenshot.value = null
+        }
+    }
+
+    fun pressHardwareKey(keycode: String) {
+        viewModelScope.launch {
+            log("Agent", "Pressing hardware key: $keycode", LogLevel.INFO)
+            val response = adbRepository.pressKey(keycode)
+            delay(500L)
+            dumpMuttonAgent(silent = true)
+        }
+    }
+
+    fun saveCurrentLayoutSource(targetDir: File) {
+        val currentRecord = _timelineItems.value.lastOrNull() as? TimelineItem.Record
+        if (currentRecord == null) {
+            showSnackbar("No layout available to export")
+            return
+        }
+        val screenshotBase64 = currentRecord.snapshot.screenshotBase64
+        val jsonLayout = currentRecord.snapshot.jsonDump
+        
+        viewModelScope.launch {
+            if (!targetDir.exists()) {
+                targetDir.mkdirs()
+            }
+            val timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
+            
+            var success = true
+            try {
+                val jsonFile = File(targetDir, "layout_$timestamp.json")
+                jsonFile.writeText(jsonLayout)
+                log("SYSTEM", "Layout source exported to: ${jsonFile.absolutePath}", LogLevel.INFO)
+            } catch (e: Exception) {
+                success = false
+                log("SYSTEM", "Failed to export layout source: ${e.message}", LogLevel.ERROR)
+            }
+
+            if (screenshotBase64.isNotEmpty()) {
+                try {
+                    val imgBytes = java.util.Base64.getDecoder().decode(screenshotBase64)
+                    val pngFile = File(targetDir, "layout_$timestamp.png")
+                    pngFile.writeBytes(imgBytes)
+                } catch (e: Exception) {
+                    success = false
+                    log("SYSTEM", "Failed to export layout screenshot: ${e.message}", LogLevel.ERROR)
+                }
+            }
+
+            if (success) {
+                showSnackbar("Layout source exported successfully")
+            } else {
+                showSnackbar("Failed to export layout source")
+            }
+        }
+    }
+
+
+    // UI Inspector nested history properties
+    private val _leftPanelMode = MutableStateFlow(0) // 0: UI Tree View, 1: History View
+    val leftPanelMode = _leftPanelMode.asStateFlow()
+
+    private val _layoutHistory = MutableStateFlow<List<LayoutHistoryItem>>(emptyList())
+    val layoutHistory = _layoutHistory.asStateFlow()
+
+    fun setLeftPanelMode(mode: Int) {
+        _leftPanelMode.value = mode
+        if (mode == 1) {
+            loadLayoutHistory()
+        }
+    }
+
+    fun loadLayoutHistory() {
+        val savedDir = File(baseDir, "saved_layouts")
+        if (!savedDir.exists()) {
+            _layoutHistory.value = emptyList()
+            return
+        }
+        
+        val records = org.example.project.model.LayoutDatabase.getAllRecords()
+        val items = records.map { rec ->
+            val jsonFile = File(savedDir, rec.jsonFilepath)
+            val pngFile = rec.pngFilepath?.let { File(savedDir, it) }
+            
+            val display = try {
+                val instant = java.time.Instant.ofEpochMilli(rec.timestamp)
+                val formatter = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+                    .withZone(java.time.ZoneId.systemDefault())
+                formatter.format(instant)
+            } catch (e: Exception) {
+                rec.timestamp.toString()
+            }
+            
+            LayoutHistoryItem(
+                timestamp = rec.timestamp.toString(),
+                jsonFile = jsonFile,
+                pngFile = pngFile,
+                displayTime = display,
+                uuid = rec.uuid,
+                tag = rec.tag
+            )
+        }
+        
+        _layoutHistory.value = items
+    }
+
+    fun selectHistoryItem(item: LayoutHistoryItem) {
+        try {
+            val jsonLayout = item.jsonFile.readText()
+            val gson = Gson()
+            val uiNode = gson.fromJson(jsonLayout, UiNode::class.java)
+            _uiDumpRoot.value = uiNode
+            
+            if (item.pngFile != null && item.pngFile.exists()) {
+                val bytes = item.pngFile.readBytes()
+                val skiaImage = Image.makeFromEncoded(bytes)
+                _uiDumpScreenshot.value = skiaImage.toComposeImageBitmap()
+            } else {
+                _uiDumpScreenshot.value = null
+            }
+            _activeLayoutTime.value = item.displayTime
+        } catch (e: Exception) {
+            log("SYSTEM", "Failed to load history item: ${e.message}", LogLevel.ERROR)
+            showSnackbar("Failed to load layout history item")
         }
     }
 
@@ -545,6 +816,17 @@ class ToolViewModel : ViewModel(), KoinComponent {
                 onComplete("Error: ${e.message}")
             } finally {
                 _isTransferring.value = false
+            }
+        }
+    }
+
+    fun pushDroppedFiles(files: List<File>, onComplete: (String) -> Unit = {}) {
+        viewModelScope.launch {
+            files.forEach { file ->
+                val fileName = file.name
+                val current = _currentPath.value
+                val destPath = if (current.endsWith("/")) "$current$fileName" else "$current/$fileName"
+                pushFile(file.absolutePath, destPath, onComplete)
             }
         }
     }

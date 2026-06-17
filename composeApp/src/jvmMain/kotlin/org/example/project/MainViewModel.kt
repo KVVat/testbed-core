@@ -152,6 +152,9 @@ class MainViewModel : ViewModel(), KoinComponent {
     private val _snackbarMessage = MutableSharedFlow<String>()
     val snackbarMessage = _snackbarMessage.asSharedFlow()
 
+    private val _screenshotSuccessFlow = MutableSharedFlow<Unit>()
+    val screenshotSuccessFlow = _screenshotSuccessFlow.asSharedFlow()
+
     fun showSnackbar(message: String) {
         viewModelScope.launch {
             _snackbarMessage.emit(message)
@@ -303,6 +306,35 @@ class MainViewModel : ViewModel(), KoinComponent {
             java.awt.Desktop.getDesktop().open(resultsDir)
         } catch (e: Exception) {
             log("SYSTEM", "Failed to open results directory: ${e.message}", LogLevel.ERROR)
+        }
+    }
+    
+    /**
+     * Captures a screenshot of the connected device and saves it to the host screenshot directory.
+     */
+    fun takeScreenshot() {
+        viewModelScope.launch {
+            try {
+                adbRepository.adbObserver.captureScreenshot()
+                _screenshotSuccessFlow.emit(Unit)
+            } catch (e: Exception) {
+                log("SYSTEM", "Failed to capture screenshot: ${e.message}", LogLevel.ERROR)
+            }
+        }
+    }
+
+    /**
+     * Opens the screenshots directory in the OS file manager.
+     */
+    fun openScreenshotDirectory() {
+        val screenshotDir = File(baseDir, "screenshots")
+        if (!screenshotDir.exists()) {
+            screenshotDir.mkdirs()
+        }
+        try {
+            java.awt.Desktop.getDesktop().open(screenshotDir)
+        } catch (e: Exception) {
+            log("SYSTEM", "Failed to open screenshot directory: ${e.message}", LogLevel.ERROR)
         }
     }
 

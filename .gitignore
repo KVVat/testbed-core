@@ -45,7 +45,7 @@ repomix*
 bin/
 composeApp/plugins
 composeApp/screenshots
-
+composeApp/saved_layouts
 results/
 xml-patches/
 composeApp/*.properties

@@ -3,6 +3,7 @@ package org.example.project.mcp
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import org.example.project.model.UiNode
 
 /**
  * Agentから返されるUI DumpのJSONレスポンスを、LLM向けのフラット要約テキストに変換する。
@@ -27,6 +28,71 @@ object UiDumpSummarizer {
      */
     fun summarizeInteractable(agentResponseJson: String): String {
         return buildSummary(agentResponseJson, ::isInteractableNode)
+    }
+
+    fun isMeaningfulNode(node: UiNode): Boolean {
+        return node.text.isNotEmpty() ||
+               node.contentDescription.isNotEmpty() ||
+               node.clickable ||
+               node.scrollable ||
+               node.checkable ||
+               node.longClickable
+    }
+
+    private fun formatNode(node: UiNode, index: Int): String {
+        val text = node.text
+        val desc = node.contentDescription
+        val resId = node.resourceId
+        val className = node.className.substringAfterLast(".")
+        val clickable = node.clickable
+        val longClickable = node.longClickable
+        val checkable = node.checkable
+        val checked = node.checked
+        val scrollable = node.scrollable
+        val selected = node.selected
+        val focused = node.focused
+        val password = node.password
+
+        val label = when {
+            text.isNotEmpty() -> truncate(text)
+            desc.isNotEmpty() -> truncate(desc)
+            resId.isNotEmpty() -> resId.substringAfterLast("/")
+            else -> ""
+        }
+
+        val cx = (node.bounds.left + node.bounds.right) / 2
+        val cy = (node.bounds.top + node.bounds.bottom) / 2
+
+        val action = if (clickable || longClickable) "tap($cx,$cy)" else "at($cx,$cy)"
+
+        val props = buildList {
+            if (clickable) add("clickable")
+            if (scrollable) add("scrollable")
+            if (checkable) add("checkable")
+            if (checked) add("checked")
+            if (selected) add("selected")
+            if (focused) add("focused")
+            if (password) add("password")
+        }.joinToString(" ")
+
+        return if (props.isNotEmpty()) {
+            "[$index] $className \"$label\" $action $props"
+        } else {
+            "[$index] $className \"$label\" $action"
+        }
+    }
+
+    fun getSummaryLines(root: UiNode): List<String> {
+        val lines = mutableListOf<String>()
+        var index = 0
+        fun walk(node: UiNode) {
+            if (isMeaningfulNode(node)) {
+                lines.add(formatNode(node, index++))
+            }
+            node.children.forEach { walk(it) }
+        }
+        walk(root)
+        return lines
     }
 
     /** agentResponseJsonからBase64スクリーンショットを取り出す。なければnull。 */

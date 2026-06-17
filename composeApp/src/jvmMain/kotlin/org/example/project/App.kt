@@ -83,6 +83,19 @@ fun App() {
             snackbarHostState.showSnackbar(message)
         }
     }
+    
+    LaunchedEffect(viewModel) {
+        viewModel.screenshotSuccessFlow.collect {
+            val result = snackbarHostState.showSnackbar(
+                message = "Screenshot captured successfully!",
+                actionLabel = "Open Folder",
+                duration = SnackbarDuration.Short
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                viewModel.openScreenshotDirectory()
+            }
+        }
+    }
 
     MaterialTheme(colorScheme = darkColorScheme()) {
         Box(modifier = Modifier.fillMaxSize()) {
@@ -133,6 +146,10 @@ fun App() {
                     Row(modifier = Modifier.padding(padding).fillMaxSize()) {
                         LogConsole(logs = logLines, modifier = Modifier.weight(1f))
                         UtilitySideBar(
+                            adbConnected = uiState.adbIsValid,
+                            onScreenshotClick = { viewModel.takeScreenshot() },
+                            onFileExplorerClick = { toolViewModel.openFileExplorer() },
+                            onUiInspectorClick = { toolViewModel.openUiInspector() },
                             onSettingsClick = { showSettingsDialog = true }
                         )
                     }
@@ -696,12 +713,37 @@ fun LogLineItem(log: LogLine) {
 
 @Composable
 fun UtilitySideBar(
+    adbConnected: Boolean,
+    onScreenshotClick: () -> Unit,
+    onFileExplorerClick: () -> Unit,
+    onUiInspectorClick: () -> Unit,
     onSettingsClick: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxHeight().width(56.dp).background(Color(0xFF2B2D30)).drawWithContent {
         drawContent()
         drawLine(color = Color(0xFF1E1F22), start = Offset(0f, 0f), end = Offset(0f, size.height), strokeWidth = 1.dp.toPx())
     }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Top) {
+        Spacer(Modifier.height(16.dp))
+        TooltipIconButton(
+            icon = Icons.Default.CameraAlt,
+            tooltip = "Capture Screenshot",
+            enabled = adbConnected,
+            onClick = onScreenshotClick
+        )
+        Spacer(Modifier.height(12.dp))
+        TooltipIconButton(
+            icon = Icons.Default.FolderOpen,
+            tooltip = "Open File Explorer",
+            enabled = adbConnected,
+            onClick = onFileExplorerClick
+        )
+        Spacer(Modifier.height(12.dp))
+        TooltipIconButton(
+            icon = Icons.Default.CropFree,
+            tooltip = "Open UI Inspector",
+            enabled = adbConnected,
+            onClick = onUiInspectorClick
+        )
         Spacer(Modifier.weight(1f))
         TooltipIconButton(Icons.Default.Settings, "Settings") { onSettingsClick() }
         Spacer(Modifier.height(16.dp))

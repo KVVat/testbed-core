@@ -43,6 +43,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
+import java.io.File
 import kotlinx.serialization.json.putJsonArray
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import org.example.project.adb.AdbObserver
@@ -183,29 +184,23 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
 
         mcpServer.addTool(
-            name = "start_stream",
-            description = "Start screenshot stream. Optional parameters: 'fps' (Float, default 1.0) and 'image_quality' (Int: 1=100% size/80% jpeg, 2=50% size/50% jpeg, 3=33% size/33% jpeg, 4=25% size/20% jpeg. Default is 2).",
+            name = "get_screen_dump",
+            description = "Retrieves the current UI hierarchy and a mandatory screenshot. Default format is 'summary' (LLM-optimized text) or 'json' (raw tree). Saves the layout and image internally to history DB.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
-                    putJsonObject("fps") { put("type", "number"); put("description", "Frames per second. Default 1.0") }
-                    putJsonObject("image_quality") { put("type", "integer"); put("description", "1=100%/80%jpeg, 2=50%/50%jpeg, 3=33%/33%jpeg, 4=25%/20%jpeg. Default 2") }
+                    putJsonObject("image_quality") { put("type", "integer"); put("description", "1=100%, 2=50%, 3=33%, 4=25%. Default 4 (25%)") }
+                    putJsonObject("tag") { put("type", "string"); put("description", "Optional custom string key to tag the saved screen layout.") }
+                    putJsonObject("format") { put("type", "string"); put("description", "Output format: 'summary' (default) or 'json'") }
                 }
             )
         ) { request ->
             val args = request.params.arguments ?: emptyMap()
-            val fps = args["fps"]?.jsonPrimitive?.contentOrNull?.toFloatOrNull() ?: 1f
-            val quality = args["image_quality"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 2
-            
-            adbObserver.startScreenshotStream(fps, quality)
-            CallToolResult(content = listOf(TextContent("Stream started at $fps fps, quality level $quality")))
-        }
+            val format = args["format"]?.jsonPrimitive?.contentOrNull ?: "summary"
+            val quality = args["image_quality"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 4
+            val tag = args["tag"]?.jsonPrimitive?.contentOrNull
 
-        mcpServer.addTool(
-            name = "stop_stream",
-            description = "Stop screenshot stream"
-        ) { _ ->
-            adbObserver.stopScreenshotStream()
-            CallToolResult(content = listOf(TextContent("Stream stopped")))
+            val rawResult = adbObserver.uiDumpExecute(format, includeImage = true, quality = quality, tag = tag)
+            CallToolResult(content = listOf(TextContent(rawResult)))
         }
 
         mcpServer.addTool(
@@ -224,6 +219,7 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
                     putJsonObject("format") { put("type", "string"); put("description", "Output format: 'summary' (compact flat list, default) or 'json' (full tree)") }
                     putJsonObject("include_image") { put("type", "boolean"); put("description", "Include screenshot. Default false") }
                     putJsonObject("image_quality") { put("type", "integer"); put("description", "1=100%, 2=50%, 3=33%, 4=25%. Default 4 (25%)") }
+                    putJsonObject("tag") { put("type", "string"); put("description", "Optional custom string key to tag the saved layout in history registry.") }
                 }
             )
         ) { request ->
@@ -231,9 +227,71 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
             val format = args["format"]?.jsonPrimitive?.contentOrNull ?: "summary"
             val includeImage = args["include_image"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: false
             val quality = args["image_quality"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 4
+            val tag = args["tag"]?.jsonPrimitive?.contentOrNull
 
-            val rawResult = adbObserver.uiDumpExecute(format, includeImage, quality)
+            val rawResult = adbObserver.uiDumpExecute(format, includeImage, quality, tag)
             CallToolResult(content = listOf(TextContent(rawResult)))
+        }
+
+        mcpServer.addTool(
+            name = "get_ui_dump_history",
+            description = "Retrieves a historical UI layout dump by UUID, Tag, or latest relative Index.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("uuid") { put("type", "string"); put("description", "Query layout directly by its unique UUID (Highest precedence)") }
+                    putJsonObject("tag") { put("type", "string"); put("description", "Retrieve the latest layout saved with this tag (Second precedence)") }
+                    putJsonObject("index") { put("type", "integer"); put("description", "Relative index offset from latest. 0 = latest, 1 = 1-step-back, etc. (Default 0)") }
+                    putJsonObject("format") { put("type", "string"); put("description", "Format option: 'summary' (optimized, default) or 'json' (raw)") }
+                }
+            )
+        ) { request ->
+            val args = request.params.arguments ?: emptyMap()
+            val uuid = args["uuid"]?.jsonPrimitive?.contentOrNull
+            val tag = args["tag"]?.jsonPrimitive?.contentOrNull
+            val index = args["index"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+            val format = args["format"]?.jsonPrimitive?.contentOrNull ?: "summary"
+
+            val record = when {
+                !uuid.isNullOrBlank() -> org.example.project.model.LayoutDatabase.getRecordByUuid(uuid)
+                !tag.isNullOrBlank() -> org.example.project.model.LayoutDatabase.getLatestRecordByTag(tag)
+                else -> org.example.project.model.LayoutDatabase.getRecordByOffset(index)
+            }
+
+            if (record == null) {
+                CallToolResult(content = listOf(TextContent("Error: No layout artifact matched the specified query parameters.")))
+            } else {
+                val baseDirStr = org.example.project.JUnitBridge.baseDir.ifBlank { "." }
+                val savedDir = java.io.File(baseDirStr, "saved_layouts")
+                val jsonFile = java.io.File(savedDir, record.jsonFilepath)
+                
+                if (!jsonFile.exists()) {
+                    CallToolResult(content = listOf(TextContent("Error: Layout file not found on disk at: ${jsonFile.absolutePath}")))
+                } else {
+                    val jsonText = jsonFile.readText()
+                    val outputText = if (format == "summary") {
+                        try {
+                            val node = Gson().fromJson(jsonText, org.example.project.model.UiNode::class.java)
+                            UiDumpSummarizer.getSummaryLines(node).joinToString("\n")
+                        } catch (e: Exception) {
+                            "Error parsing JSON layout for summary: ${e.message}\n\n$jsonText"
+                        }
+                    } else {
+                        jsonText
+                    }
+                    
+                    val pngFile = record.pngFilepath?.let { java.io.File(savedDir, it) }
+                    val pngPathInfo = if (pngFile != null && pngFile.exists()) {
+                        ", png_path: ${pngFile.absolutePath}"
+                    } else {
+                        ""
+                    }
+                    val metadataFooter = "\n\n[Artifact metadata -> uuid: ${record.uuid}" +
+                            (if (record.tag != null) ", tag: ${record.tag}" else "") +
+                            ", timestamp: ${record.timestamp}$pngPathInfo]"
+                    
+                    CallToolResult(content = listOf(TextContent(outputText + metadataFooter)))
+                }
+            }
         }
 
         mcpServer.addTool(
@@ -498,14 +556,6 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
                 val result = adbObserver.uninstallApp(packageName, keepData)
                 CallToolResult(content = listOf(TextContent(result)))
             }
-        }
-
-        mcpServer.addTool(
-            name = "clear_logcat",
-            description = "Clears the device's Logcat buffer (adb logcat -c)."
-        ) { _ ->
-            val result = adbObserver.clearLogcatBuffer()
-            CallToolResult(content = listOf(TextContent(result)))
         }
 
         mcpServer.addTool(
