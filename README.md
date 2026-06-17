@@ -1,17 +1,20 @@
 # TestBed Core
 
-TestBed Core is a **Kotlin Multiplatform Desktop Application** designed for Android device management, automation, and testing. It provides a lightweight GUI for ADB/Fastboot operations and serves as a host for running custom test plugins.
+🇺🇸 EN | [🇯🇵 JP](./README_JA.md)
 
-![Screenshot](screenshot.jpg)
+TestBed Core is a **Compose Multiplatform Desktop Application** designed for Android device management, automation, and testing. It provides a lightweight GUI for ADB device operations, dynamic test plugin hosting, and a built-in Model Context Protocol (MCP) server for LLM agent integration.
+
+![Screenshot](screen.jpg)
 
 ## Key Features
 
-* **Portable Design**: Runs immediately without complex installation. ADB and Fastboot are automatically set up within the tool's directory.
+* **Portable Design**: Runs immediately without complex installation. ADB is automatically set up within the tool's directory.
 * **Standalone Execution**: No Java Runtime Environment (JRE) required for end-users. The application comes with a bundled lightweight JRE.
-* **Device Control**: One-click actions for Reboot (System/Bootloader), Screenshots, Text Input, and App Data Clearing.
-* **Logcat Monitor**: Real-time log monitoring with filtering and level selection.
-* **Test Plugin Host**: Load and execute custom JUnit-based test plugins (JARs) dynamically.
-* **MCP Server**: Built-in Model Context Protocol (SSE) server for LLM agent integration, enabling remote device control and automated test execution.
+* **Logcat Monitor**: Real-time log monitoring with filtering, tag matching, and level selection.
+* **File Explorer**: Dynamic file system explorer allowing host-to-device push/pull operations and file preview.
+* **UI Inspector & Layout Archiver**: Interactive UI hierarchy viewer with click coordinate simulation and layout auto-saving. Archived layouts are cataloged in an SQLite database with UUIDs and tags for historical query retrieval.
+* **Test Plugin Host**: Load and execute custom JUnit-based test plugins (JARs) dynamically and view real-time logs.
+* **MCP Server**: Built-in Model Context Protocol (SSE) server for LLM agent integration, enabling remote device control, automated test execution, and layout history queries.
 * **Cross-Platform**: Works on Windows, macOS, and Linux.
 
 ## Getting Started (For End Users)
@@ -19,7 +22,7 @@ TestBed Core is a **Kotlin Multiplatform Desktop Application** designed for Andr
 You do not need to install Android Studio, Android SDK, or even Java. The provided launcher scripts handle the environment setup automatically.
 
 ### 1. Download
-Download the latest release ZIP file for your operating system (Windows, macOS, or Ubuntu) from the Releases or GitHub Actions Artifacts page and extract it.
+Download the latest release ZIP file for your operating system (Windows, macOS, or Ubuntu) from the Releases and extract it.
 
 ### 2. Run the Tool
 Navigate to the extracted folder and execute the launcher script for your OS:
@@ -29,7 +32,7 @@ Navigate to the extracted folder and execute the launcher script for your OS:
   * **Note for HiDPI/4K displays**: If the font or UI elements appear extremely small, you can scale them by prefixing the command with `GDK_SCALE`. For example: `GDK_SCALE=2 ./testbed-ubuntu.sh`.
 * **macOS**: Double-click the `TestbedCore.app` icon. *(If you see an "unidentified developer" warning, right-click the app, select **Open**, and click **Open** again).*
 
-> **Note**: On the first run, the script will automatically download the official Android SDK `platform-tools` (ADB/Fastboot) from Google and set them up in the `bin/` directory.
+> **Note**: On the first run, the script will automatically download the official Android SDK `platform-tools` (ADB) from Google and set them up in the `bin/` directory.
 
 ---
 
