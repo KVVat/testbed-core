@@ -34,6 +34,24 @@ We should implement a dedicated Gradle submodule (e.g., `:testbed-cli`) that com
 
 ---
 
+## 1.6. Local ADB Kill-Switch for Remote/VM Environments
+
+### Background
+When working in remote development setups (e.g., connecting to target devices inside a VM or forwarding ADB sockets via SSH to a remote server), having the local machine's background ADB daemon running can interfere with connection routing, causing port conflicts and connection errors. Currently, developers have to manually type `adb kill-server` in the terminal repeatedly to prevent the local server from auto-starting.
+
+### Proposed Solution
+Introduce a global **"ADB Kill-Switch"** toggle inside the Host Application GUI (and optionally as an MCP tool).
+
+* **Proposed Behavior**:
+  * When toggled **ON**:
+    1. The host application immediately executes `adb kill-server` locally.
+    2. The application temporarily suspends its background ADB polling loops (`observeAdb()`) and halts any automated SDK client socket queries that could implicitly trigger `adb start-server`.
+    3. The application intercepts and blocks manual trigger operations (like screenshot refreshing or manual app installations) to ensure the local daemon stays dead.
+  * When toggled **OFF**:
+    1. The polling loop resumes, allowing the local ADB daemon to start and connect to devices normally.
+
+---
+
 ## 2. Mutton Agent (Android Client) Improvements
 
 ### A. Socket Connection Multi-Threading (Concurrent Request Handling)

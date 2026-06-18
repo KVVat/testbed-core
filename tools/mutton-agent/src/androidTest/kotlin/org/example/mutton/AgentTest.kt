@@ -16,6 +16,13 @@ import org.junit.runner.RunWith
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.PrintWriter
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Android Instrumentation Test として起動されるエントリポイント
@@ -29,13 +36,8 @@ class AgentTest {
     private lateinit var instrumentation: Instrumentation
     private lateinit var device: UiDevice
 
-    @Volatile
-    private var isImageStreaming = false
-    private var imageStreamThread: Thread? = null
-
-    @Volatile
-    private var isDumpStreaming = false
-    private var dumpStreamThread: Thread? = null
+    private val serverScope = CoroutineScope(Dispatchers.IO)
+    private val deviceMutex = Mutex()
 
     @Test
     fun startServer() {
@@ -56,9 +58,9 @@ class AgentTest {
                 try {
                     // クライアントからの接続を待機 (ブロッキング)
                     val client = server.accept()
-                    // クライアントとの通信処理 (簡易的にメインスレッドで処理)
-                    // 本格的にやるなら別スレッドに逃がすが、1対1通信ならこれでもOK
-                    handleClient(client)
+                    serverScope.launch {
+                        handleClient(client)
+                    }
 
                 } catch (e: Exception) {
                     Log.i("MuttonAgent", "Connection error: ${e.message}")
@@ -74,13 +76,13 @@ class AgentTest {
         Log.i("MuttonAgent", ">>> AGENT_STOPPED")
     }
 
-    private fun handleClient(client: LocalSocket) {
+    private suspend fun handleClient(client: LocalSocket) {
         // useブロックで自動的にクローズ
         client.use { socket ->
-            val reader = BufferedReader(InputStreamReader(socket.inputStream))
-            val writer = PrintWriter(socket.outputStream, true)
-
             try {
+                val reader = BufferedReader(InputStreamReader(socket.inputStream))
+                val writer = PrintWriter(socket.outputStream, true)
+
                 // 行単位でコマンドを受信
                 var line: String? = reader.readLine()
                 while (line != null) {
@@ -103,108 +105,18 @@ class AgentTest {
                     // 次の行を読む
                     line = reader.readLine()
                 }
+            } catch (e: Exception) {
+                Log.e("MuttonAgent", "Error in handleClient processing: ${e.message}", e)
             } finally {
-                // クライアント切断時にストリームを確実に停止
-                isImageStreaming = false
-                imageStreamThread?.interrupt()
-                imageStreamThread = null
-                
-                isDumpStreaming = false
-                dumpStreamThread?.interrupt()
-                dumpStreamThread = null
+                // Cleanups for active streams are no longer needed
             }
         }
     }
 
-    private fun processCommand(json: JSONObject, writer: PrintWriter): JSONObject {
+    private suspend fun processCommand(json: JSONObject, writer: PrintWriter): JSONObject {
         val cmd = json.optString("cmd")
         Log.i("MuttonAgent", "Processing command: $cmd")
         return when (cmd) {
-            "start_stream" -> {
-                val fps = json.optDouble("fps", 1.0)
-                val delayMs = (1000.0 / fps).toLong()
-
-                if (!isImageStreaming) {
-                    isImageStreaming = true
-                    imageStreamThread = Thread {
-                        while (isImageStreaming) {
-                            try {
-                                val bitmap = instrumentation.uiAutomation.takeScreenshot()
-                                if (bitmap != null) {
-                                    val qualityLevel = json.optInt("image_quality", 2)
-                                    val base64 = compressBitmap(bitmap, qualityLevel)
-                                    val frameJson = JSONObject()
-                                        .put("type", "stream_frame")
-                                        .put("data", base64)
-                                    
-                                    // PrintWriter internally synchronizes print/println operations
-                                    writer.println(frameJson.toString())
-                                    bitmap.recycle()
-                                }
-                                Thread.sleep(delayMs)
-                            } catch (e: InterruptedException) {
-                                break
-                            } catch (e: Exception) {
-                                e.printStackTrace()
-                            }
-                        }
-                    }
-                    imageStreamThread?.start()
-                    JSONObject().put("status", "ok").put("message", "Screen stream started at $fps fps")
-                } else {
-                    createError("Screen stream is already running")
-                }
-            }
-            "stop_stream" -> {
-                isImageStreaming = false
-                imageStreamThread?.interrupt()
-                imageStreamThread = null
-                JSONObject().put("status", "ok").put("message", "Screen stream stopped")
-            }
-            "start_dump_stream" -> {
-                val fps = json.optDouble("fps", 1.0)
-                val delayMs = (1000.0 / fps).toLong()
-
-                if (!isDumpStreaming) {
-                    isDumpStreaming = true
-                    dumpStreamThread = Thread {
-                        while (isDumpStreaming) {
-                            try {
-                                device.waitForIdle()
-                                val activeNode = instrumentation.uiAutomation.rootInActiveWindow
-                                if (activeNode != null) {
-                                    val rootNode = JsonUiDumper().dumpNodeRec(activeNode, 0)
-                                    val dumpJson = JSONObject()
-                                        .put("type", "dump_stream_frame")
-                                        .put("data", Json.encodeToString(rootNode))
-                                    
-                                    writer.println(dumpJson.toString())
-                                } else {
-                                    val errJson = JSONObject()
-                                        .put("type", "dump_stream_frame")
-                                        .put("error", "activeNode is null. Screen might be off or no active window.")
-                                    writer.println(errJson.toString())
-                                }
-                                Thread.sleep(delayMs)
-                            } catch (e: InterruptedException) {
-                                break
-                            } catch (e: Exception) {
-                                e.printStackTrace()
-                            }
-                        }
-                    }
-                    dumpStreamThread?.start()
-                    JSONObject().put("status", "ok").put("message", "Dump stream started at $fps fps")
-                } else {
-                    createError("Dump stream is already running")
-                }
-            }
-            "stop_dump_stream" -> {
-                isDumpStreaming = false
-                dumpStreamThread?.interrupt()
-                dumpStreamThread = null
-                JSONObject().put("status", "ok").put("message", "Dump stream stopped")
-            }
             "ping" -> {
                 JSONObject().put("status", "pong").put("message", "I am alive!")
             }
@@ -214,11 +126,10 @@ class AgentTest {
                 JSONObject().put("status", "ok").put("version", versionStr)
             }
             "get_ui_dump" -> {
-                val includeImage = json.optBoolean("include_image", false)
-                val qualityLevel = json.optInt("image_quality", 2)
-                
-                var resultJson = JSONObject()
-                val dumpThread = Thread {
+                deviceMutex.withLock {
+                    val includeImage = json.optBoolean("include_image", false)
+                    val qualityLevel = json.optInt("image_quality", 2)
+                    
                     try {
                         device.waitForIdle(1000)
                         
@@ -242,7 +153,7 @@ class AgentTest {
                             if (base64 != null) {
                                 jsonResponse.put("screenshot", base64)
                             }
-                            resultJson = jsonResponse
+                            jsonResponse
                         } else {
                             val jsonResponse = JSONObject()
                                 .put("type", "dump_result")
@@ -251,135 +162,116 @@ class AgentTest {
                             if (base64 != null) {
                                 jsonResponse.put("screenshot", base64)
                             }
-                            resultJson = jsonResponse
+                            jsonResponse
                         }
                     } catch (e: Exception) {
-                        resultJson = JSONObject()
+                        JSONObject()
                             .put("type", "dump_result")
                             .put("status", "error")
                             .put("message", "Exception during dump: ${e.message}")
                     }
                 }
-                
-                dumpThread.start()
-                try {
-                    dumpThread.join(1000)
-                } catch (e: InterruptedException) {
-                    dumpThread.interrupt()
-                }
-
-                if (dumpThread.isAlive) {
-                    Log.w("MuttonAgent", "UI Dump timed out after 1000ms. Returning fallback timeout response.")
-                    dumpThread.interrupt()
-                    JSONObject()
-                        .put("type", "dump_result")
-                        .put("status", "timeout")
-                        .put("message", "UI Dump timed out on device after 1 second.")
-                } else {
-                    resultJson
-                }
             }
             "tap" -> {
-                val x = json.optInt("x", 0)
-                val y = json.optInt("y", 0)
-                Log.i("MuttonAgent", "Tapping at ($x, $y)")
-                val success = device.click(x, y)
-                if (success) {
-                    device.waitForIdle(1000)
-                    JSONObject().put("status", "ok")
-                } else {
-                    createError("Failed to tap at ($x, $y)")
+                deviceMutex.withLock {
+                    val x = json.optInt("x", 0)
+                    val y = json.optInt("y", 0)
+                    Log.i("MuttonAgent", "Tapping at ($x, $y)")
+                    val success = device.click(x, y)
+                    if (success) {
+                        device.waitForIdle(1000)
+                        JSONObject().put("status", "ok")
+                    } else {
+                        createError("Failed to tap at ($x, $y)")
+                    }
                 }
             }
             "swipe" -> {
-                val startX = json.optInt("start_x", 0)
-                val startY = json.optInt("start_y", 0)
-                val endX = json.optInt("end_x", 0)
-                val endY = json.optInt("end_y", 0)
-                Log.i("MuttonAgent", "Swiping from ($startX, $startY) to ($endX, $endY)")
-                val success = device.swipe(startX, startY, endX, endY, 50)
-                if (success) {
-                    device.waitForIdle(1000)
-                    JSONObject().put("status", "ok")
-                } else {
-                    createError("Failed to swipe")
+                deviceMutex.withLock {
+                    val startX = json.optInt("start_x", 0)
+                    val startY = json.optInt("start_y", 0)
+                    val endX = json.optInt("end_x", 0)
+                    val endY = json.optInt("end_y", 0)
+                    Log.i("MuttonAgent", "Swiping from ($startX, $startY) to ($endX, $endY)")
+                    val success = device.swipe(startX, startY, endX, endY, 50)
+                    if (success) {
+                        device.waitForIdle(1000)
+                        JSONObject().put("status", "ok")
+                    } else {
+                        createError("Failed to swipe")
+                    }
                 }
             }
             "input_text" -> {
-                val text = json.optString("text", "")
-                val pressEnter = json.optBoolean("press_enter", true)
-                Log.i("MuttonAgent", "Inputting text: $text")
-                if (text.isNotEmpty()) {
-                    val process = Runtime.getRuntime().exec(arrayOf("input", "text", text))
-                    process.waitFor()
-                }
-                if (pressEnter) {
-                    device.pressKeyCode(android.view.KeyEvent.KEYCODE_ENTER)
-                }
-                device.waitForIdle(1000)
-                JSONObject().put("status", "ok")
-            }
-            "press_key" -> {
-                val keycodeStr = json.optString("keycode", "")
-                Log.i("MuttonAgent", "Pressing key: $keycodeStr")
-                if (keycodeStr.isNotEmpty()) {
-                    val codeStr = if (keycodeStr.startsWith("KEYCODE_")) keycodeStr else "KEYCODE_$keycodeStr"
-                    val code = android.view.KeyEvent.keyCodeFromString(codeStr)
-                    if (code != android.view.KeyEvent.KEYCODE_UNKNOWN) {
-                        device.pressKeyCode(code)
-                    } else {
-                        val process = Runtime.getRuntime().exec(arrayOf("input", "keyevent", keycodeStr))
+                deviceMutex.withLock {
+                    val text = json.optString("text", "")
+                    val pressEnter = json.optBoolean("press_enter", true)
+                    Log.i("MuttonAgent", "Inputting text: $text")
+                    if (text.isNotEmpty()) {
+                        val process = Runtime.getRuntime().exec(arrayOf("input", "text", text))
                         process.waitFor()
+                    }
+                    if (pressEnter) {
+                        device.pressKeyCode(android.view.KeyEvent.KEYCODE_ENTER)
                     }
                     device.waitForIdle(1000)
                     JSONObject().put("status", "ok")
-                } else {
-                    createError("Empty keycode")
+                }
+            }
+            "press_key" -> {
+                deviceMutex.withLock {
+                    val keycodeStr = json.optString("keycode", "")
+                    Log.i("MuttonAgent", "Pressing key: $keycodeStr")
+                    if (keycodeStr.isNotEmpty()) {
+                        val codeStr = if (keycodeStr.startsWith("KEYCODE_")) keycodeStr else "KEYCODE_$keycodeStr"
+                        val code = android.view.KeyEvent.keyCodeFromString(codeStr)
+                        if (code != android.view.KeyEvent.KEYCODE_UNKNOWN) {
+                            device.pressKeyCode(code)
+                        } else {
+                            val process = Runtime.getRuntime().exec(arrayOf("input", "keyevent", keycodeStr))
+                            process.waitFor()
+                        }
+                        device.waitForIdle(1000)
+                        JSONObject().put("status", "ok")
+                    } else {
+                        createError("Empty keycode")
+                    }
                 }
             }
             "shell" -> {
                 val commandStr = json.getString("args")
+                Log.i("MuttonAgent", "Executing shell command: $commandStr")
                 
-                var resultJson = JSONObject()
-                var process: Process? = null
-                val shellThread = Thread {
-                    try {
-                        process = Runtime.getRuntime().exec(commandStr)
-                        val output = process?.inputStream?.bufferedReader()?.use { it.readText() } ?: ""
-                        val errorOutput = process?.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
-                        
-                        val exitVal = process?.waitFor() ?: -1
-                        if (exitVal == 0) {
-                            resultJson = JSONObject().put("status", "ok").put("output", output)
-                        } else {
-                            resultJson = JSONObject().put("status", "failed")
-                                .put("exit_code", exitVal)
-                                .put("output", output)
-                                .put("error", errorOutput)
+                withContext(Dispatchers.IO) {
+                    val resultJson = withTimeoutOrNull(8000) {
+                        var process: Process? = null
+                        try {
+                            process = Runtime.getRuntime().exec(commandStr)
+                            val output = process.inputStream.bufferedReader().use { it.readText() }
+                            val errorOutput = process.errorStream.bufferedReader().use { it.readText() }
+                            val exitVal = process.waitFor()
+                            
+                            if (exitVal == 0) {
+                                JSONObject().put("status", "ok").put("output", output)
+                            } else {
+                                JSONObject().put("status", "failed")
+                                    .put("exit_code", exitVal)
+                                    .put("output", output)
+                                    .put("error", errorOutput)
+                            }
+                        } catch (e: Exception) {
+                            JSONObject().put("status", "error").put("message", e.message ?: "Execution failed")
+                        } finally {
+                            process?.destroy()
                         }
-                    } catch (e: Exception) {
-                        resultJson = JSONObject().put("status", "error").put("message", e.message ?: "Execution failed")
                     }
-                }
-                
-                shellThread.start()
-                try {
-                    shellThread.join(8000)
-                } catch (e: InterruptedException) {
-                    shellThread.interrupt()
-                }
 
-                if (shellThread.isAlive) {
-                    Log.w("MuttonAgent", "Shell command timed out on device: $commandStr. Destroying process.")
-                    process?.destroy()
-                    shellThread.interrupt()
-                    JSONObject().put("status", "timeout").put("message", "Command timed out on device after 8 seconds.")
-                } else {
-                    resultJson
+                    resultJson ?: JSONObject()
+                        .put("status", "timeout")
+                        .put("message", "Command timed out on device after 8 seconds.")
                 }
             }
             "exit" -> {
-                // プロセス終了用
                 System.exit(0)
                 JSONObject().put("status", "exiting")
             }

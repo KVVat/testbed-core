@@ -16,7 +16,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.TouchApp
-import androidx.compose.material.icons.filled.CropFree
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Home
@@ -28,6 +28,15 @@ import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Image
 import org.example.project.mcp.UiDumpSummarizer
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.graphics.toComposeImageBitmap
+import org.jetbrains.skia.Image
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import androidx.compose.runtime.produceState
+import androidx.compose.foundation.Image
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.material.icons.filled.ImageNotSupported
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -68,6 +77,7 @@ fun UiInspectorPane(viewModel: ToolViewModel) {
     val inspectorMode by viewModel.inspectorMode.collectAsState()
     val uiDumpLoadingState by viewModel.uiDumpLoadingState.collectAsState()
     val activeLayoutTime by viewModel.activeLayoutTime.collectAsState()
+    val isInteracting by viewModel.isAgentInteracting.collectAsState()
     val clipboardManager = LocalClipboardManager.current
 
     var selectedNode by remember { mutableStateOf<UiNode?>(null) }
@@ -127,6 +137,33 @@ fun UiInspectorPane(viewModel: ToolViewModel) {
                         viewModel = viewModel
                     )
 
+                    if (isInteracting) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.45f))
+                                .pointerInput(Unit) {
+                                    detectTapGestures { /* Intercept all click gestures to prevent double taps */ }
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                CircularProgressIndicator(
+                                    color = Color(0xFF569CD6),
+                                    strokeWidth = 3.dp,
+                                    modifier = Modifier.size(36.dp)
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    text = "Interacting...",
+                                    color = Color.LightGray,
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+                    }
+
                     // Floating Hardware Keys Overlay (Top End)
                     if (inspectorMode == 0) {
                         Row(
@@ -148,8 +185,9 @@ fun UiInspectorPane(viewModel: ToolViewModel) {
                                 Box(
                                     modifier = Modifier
                                         .size(28.dp)
+                                        .alpha(if (isInteracting) 0.5f else 1f)
                                         .background(Color(0xFF4C5052), RoundedCornerShape(4.dp))
-                                        .clickable { viewModel.pressHardwareKey(code) },
+                                        .clickable(enabled = !isInteracting) { viewModel.pressHardwareKey(code) },
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
@@ -197,7 +235,7 @@ fun UiInspectorPane(viewModel: ToolViewModel) {
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                imageVector = Icons.Default.CropFree,
+                                imageVector = Icons.Default.History,
                                 contentDescription = "Inspection Mode",
                                 tint = Color.White,
                                 modifier = Modifier.size(16.dp)
@@ -235,7 +273,7 @@ fun UiInspectorPane(viewModel: ToolViewModel) {
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.History,
+                                    imageVector = Icons.Default.List,
                                     contentDescription = "History View Mode",
                                     tint = Color.White,
                                     modifier = Modifier.size(14.dp)
@@ -472,103 +510,200 @@ fun UiInspectorPane(viewModel: ToolViewModel) {
                         val historyItems by viewModel.layoutHistory.collectAsState()
                         val listState = rememberLazyListState()
 
+                        val groupedItems = remember(historyItems) {
+                            historyItems.groupBy { it.displayTime.take(10) }
+                        }
+
+                        val expandedStates = remember { mutableStateMapOf<String, Boolean>() }
+
+                        LaunchedEffect(groupedItems) {
+                            groupedItems.keys.forEachIndexed { index, date ->
+                                if (!expandedStates.containsKey(date)) {
+                                    expandedStates[date] = (index == 0)
+                                }
+                            }
+                        }
+
                         LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(8.dp)) {
-                            items(historyItems) { item ->
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .background(Color(0xFF2B2D30), RoundedCornerShape(4.dp))
-                                        .border(1.dp, Color(0xFF3C3F41), RoundedCornerShape(4.dp))
-                                        .clickable { viewModel.selectHistoryItem(item) }
-                                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                                ) {
+                            groupedItems.forEach { (date, itemsForDate) ->
+                                item(key = date) {
+                                    val isExpanded = expandedStates[date] ?: false
                                     Row(
-                                        modifier = Modifier.fillMaxWidth(),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { expandedStates[date] = !isExpanded }
+                                            .padding(vertical = 6.dp, horizontal = 4.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
-                                        Row(
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
                                             Icon(
-                                                imageVector = Icons.Default.History,
-                                                contentDescription = "Archived Artifact",
-                                                tint = Color(0xFF569CD6),
+                                                imageVector = if (isExpanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight,
+                                                contentDescription = "Toggle Collapse",
+                                                tint = Color.LightGray,
                                                 modifier = Modifier.size(16.dp)
                                             )
+                                            Spacer(Modifier.width(6.dp))
                                             Text(
-                                                text = item.displayTime,
-                                                color = Color.White,
-                                                fontSize = 12.sp,
+                                                text = date,
+                                                color = Color.LightGray,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 11.sp,
                                                 fontFamily = FontFamily.Monospace
                                             )
-                                            if (item.tag != null) {
-                                                Text(
-                                                    text = "[${item.tag}]",
-                                                    color = Color(0xFFFFC66D),
-                                                    fontSize = 10.sp,
-                                                    fontWeight = FontWeight.Bold
-                                                )
-                                            }
                                         }
-                                        
-                                        if (item.pngFile != null) {
-                                            Icon(
-                                                imageVector = Icons.Default.Image,
-                                                contentDescription = "Has Screenshot",
-                                                tint = Color.LightGray,
-                                                modifier = Modifier.size(14.dp)
-                                            )
-                                        }
-                                    }
-                                    
-                                    Spacer(Modifier.height(6.dp))
-                                    
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
                                         Text(
-                                            text = "UUID: ${item.uuid}",
+                                            text = "${itemsForDate.size} items",
                                             color = Color.Gray,
-                                            fontSize = 9.sp,
-                                            fontFamily = FontFamily.Monospace,
-                                            modifier = Modifier.weight(1f)
+                                            fontSize = 10.sp
                                         )
-                                        
-                                        Row(
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.AccountTree,
-                                                contentDescription = "Load and View Tree",
-                                                tint = Color.LightGray.copy(alpha = 0.8f),
-                                                modifier = Modifier
-                                                    .size(14.dp)
-                                                    .clickable {
-                                                        viewModel.selectHistoryItem(item)
-                                                        viewModel.setLeftPanelMode(0)
-                                                    }
-                                            )
-
-                                            Icon(
-                                                imageVector = Icons.Default.ContentCopy,
-                                                contentDescription = "Copy UUID",
-                                                tint = Color.LightGray.copy(alpha = 0.6f),
-                                                modifier = Modifier
-                                                    .size(12.dp)
-                                                    .clickable {
-                                                        clipboardManager.setText(AnnotatedString(item.uuid))
-                                                        viewModel.showSnackbar("Copied UUID to Clipboard")
-                                                    }
-                                            )
-                                        }
                                     }
                                 }
-                                Spacer(Modifier.height(6.dp))
+
+                                if (expandedStates[date] == true) {
+                                    items(itemsForDate, key = { it.uuid }) { item ->
+                                        val imageFile = item.pngFile
+
+                                        val imageBitmapState = produceState<ImageBitmap?>(initialValue = null, key1 = imageFile) {
+                                            if (imageFile != null && imageFile.exists()) {
+                                                withContext(Dispatchers.IO) {
+                                                    try {
+                                                        val bytes = imageFile.readBytes()
+                                                        val composeBitmap = org.jetbrains.skia.Image.makeFromEncoded(bytes).toComposeImageBitmap()
+                                                        value = composeBitmap
+                                                    } catch (e: Exception) {
+                                                        value = null
+                                                    }
+                                                }
+                                            } else {
+                                                value = null
+                                            }
+                                        }
+                                        val imageBitmap = imageBitmapState.value
+
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 4.dp)
+                                                .background(Color(0xFF2B2D30), RoundedCornerShape(4.dp))
+                                                .border(1.dp, Color(0xFF3C3F41), RoundedCornerShape(4.dp))
+                                                .clickable { viewModel.selectHistoryItem(item) }
+                                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            // Thumbnail preview
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(36.dp, 60.dp)
+                                                    .background(Color(0xFF1E1F22), RoundedCornerShape(2.dp))
+                                                    .border(0.5.dp, Color(0xFF3C3F41), RoundedCornerShape(2.dp))
+                                                    .clip(RoundedCornerShape(2.dp)),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                if (imageBitmap != null) {
+                                                    Image(
+                                                        bitmap = imageBitmap,
+                                                        contentDescription = "Preview screenshot",
+                                                        contentScale = ContentScale.Crop,
+                                                        modifier = Modifier.fillMaxSize()
+                                                    )
+                                                } else {
+                                                    Icon(
+                                                        imageVector = Icons.Default.ImageNotSupported,
+                                                        contentDescription = "No Preview",
+                                                        tint = Color.Gray.copy(alpha = 0.5f),
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                }
+                                            }
+
+                                            // Content Text Column
+                                            Column(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .padding(start = 10.dp)
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                ) {
+                                                    Row(
+                                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.History,
+                                                            contentDescription = "Archived Artifact",
+                                                            tint = Color(0xFF569CD6),
+                                                            modifier = Modifier.size(14.dp)
+                                                        )
+                                                        Text(
+                                                            text = item.displayTime.substring(11), // Time only since Date Header already shows yyyy-MM-dd
+                                                            color = Color.White,
+                                                            fontSize = 11.sp,
+                                                            fontFamily = FontFamily.Monospace
+                                                        )
+                                                        if (item.tag != null) {
+                                                            Text(
+                                                                text = "[${item.tag}]",
+                                                                color = Color(0xFFFFC66D),
+                                                                fontSize = 9.sp,
+                                                                fontWeight = FontWeight.Bold
+                                                            )
+                                                        }
+                                                    }
+                                                }
+
+                                                Spacer(Modifier.height(4.dp))
+
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Text(
+                                                        text = "UUID: ${item.uuid}",
+                                                        color = Color.Gray,
+                                                        fontSize = 9.sp,
+                                                        fontFamily = FontFamily.Monospace,
+                                                        modifier = Modifier.weight(1f)
+                                                    )
+
+                                                    Row(
+                                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.AccountTree,
+                                                            contentDescription = "Load and View Tree",
+                                                            tint = Color.LightGray.copy(alpha = 0.8f),
+                                                            modifier = Modifier
+                                                                .size(14.dp)
+                                                                .clickable {
+                                                                    viewModel.selectHistoryItem(item)
+                                                                    viewModel.setLeftPanelMode(0)
+                                                                }
+                                                        )
+
+                                                        Icon(
+                                                            imageVector = Icons.Default.ContentCopy,
+                                                            contentDescription = "Copy UUID",
+                                                            tint = Color.LightGray.copy(alpha = 0.6f),
+                                                            modifier = Modifier
+                                                                .size(12.dp)
+                                                                .clickable {
+                                                                    clipboardManager.setText(AnnotatedString(item.uuid))
+                                                                    viewModel.showSnackbar("Copied UUID to Clipboard")
+                                                                }
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Spacer(Modifier.height(6.dp))
+                                    }
+                                }
                             }
                         }
 

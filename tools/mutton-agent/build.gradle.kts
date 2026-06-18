@@ -52,6 +52,8 @@ dependencies {
     androidTestImplementation("androidx.test:monitor:1.7.2")
     androidTestImplementation("org.json:json:20231013")
     androidTestImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.1")
+    androidTestImplementation(libs.kotlinx.coroutines.core)
+    androidTestImplementation(libs.kotlinx.coroutines.android)
 }
 
 // --- Agent APK デプロイタスク ---

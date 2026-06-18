@@ -370,111 +370,123 @@ class ToolViewModel : ViewModel(), KoinComponent {
     }
 
     fun performTap(node: UiNode) {
+        if (_isAgentInteracting.value) return
         viewModelScope.launch {
-            val activeRoot = _uiDumpRoot.value ?: return@launch
-            val beforeTimestamp = System.currentTimeMillis()
-            
-            // Generate click coordinates
-            val x = (node.bounds.left + node.bounds.right) / 2
-            val y = (node.bounds.top + node.bounds.bottom) / 2
+            _isAgentInteracting.value = true
+            try {
+                val activeRoot = _uiDumpRoot.value ?: return@launch
+                val beforeTimestamp = System.currentTimeMillis()
+                
+                // Generate click coordinates
+                val x = (node.bounds.left + node.bounds.right) / 2
+                val y = (node.bounds.top + node.bounds.bottom) / 2
 
-            log("Agent", "Simulating tap on element at ($x, $y)", LogLevel.INFO)
-            val response = adbRepository.tapCoordinate(x, y)
+                log("Agent", "Simulating tap on element at ($x, $y)", LogLevel.INFO)
+                val response = adbRepository.tapCoordinate(x, y)
 
-            if (response != null && response.isNotEmpty()) {
-                try {
-                    val gson = Gson()
-                    val dumpResult = gson.fromJson(response, DumpResult::class.java)
-                    if (dumpResult != null && dumpResult.status == "ok") {
-                        val afterTimestamp = System.currentTimeMillis()
-                        val afterJsonDump = dumpResult.output
-                        val afterScreenshot = dumpResult.screenshot ?: ""
+                if (response != null && response.isNotEmpty()) {
+                    try {
+                        val gson = Gson()
+                        val dumpResult = gson.fromJson(response, DumpResult::class.java)
+                        if (dumpResult != null && dumpResult.status == "ok") {
+                            val afterTimestamp = System.currentTimeMillis()
+                            val afterJsonDump = dumpResult.output
+                            val afterScreenshot = dumpResult.screenshot ?: ""
 
-                        lastRawScreenshotBase64 = afterScreenshot // Update cache
+                            lastRawScreenshotBase64 = afterScreenshot // Update cache
 
-                        val afterSnapshot = Snapshot(
-                            timestamp = afterTimestamp,
-                            jsonDump = afterJsonDump,
-                            screenshotBase64 = afterScreenshot
-                        )
-
-                        val newRecord = TimelineItem.Record(
-                            id = "rec_$afterTimestamp",
-                            timestamp = afterTimestamp,
-                            snapshot = afterSnapshot,
-                            hasChange = true, // Tapping always causes an active event node to be created
-                            eventLabel = "Tap",
-                            actionDetails = ActionDetails(
-                                command = "tap",
-                                args = mapOf("x" to x, "y" to y)
+                            val afterSnapshot = Snapshot(
+                                timestamp = afterTimestamp,
+                                jsonDump = afterJsonDump,
+                                screenshotBase64 = afterScreenshot
                             )
-                        )
 
-                        val currentList = _timelineItems.value.toMutableList()
-                        currentList.add(newRecord)
-                        if (currentList.size > 36) { // Keep last 3 minutes (36 steps * 5s)
-                            currentList.removeAt(0)
+                            val newRecord = TimelineItem.Record(
+                                id = "rec_$afterTimestamp",
+                                timestamp = afterTimestamp,
+                                snapshot = afterSnapshot,
+                                hasChange = true, // Tapping always causes an active event node to be created
+                                eventLabel = "Tap",
+                                actionDetails = ActionDetails(
+                                    command = "tap",
+                                    args = mapOf("x" to x, "y" to y)
+                                )
+                            )
+
+                            val currentList = _timelineItems.value.toMutableList()
+                            currentList.add(newRecord)
+                            if (currentList.size > 36) { // Keep last 3 minutes (36 steps * 5s)
+                                currentList.removeAt(0)
+                            }
+                            _timelineItems.value = currentList
+                            _selectedTimelineIndex.value = currentList.size - 1
+
+                            updateActiveSnapshot(afterSnapshot, dumpResult.screen_width, dumpResult.screen_height)
                         }
-                        _timelineItems.value = currentList
-                        _selectedTimelineIndex.value = currentList.size - 1
-
-                        updateActiveSnapshot(afterSnapshot, dumpResult.screen_width, dumpResult.screen_height)
+                    } catch (e: Exception) {
+                        log("Agent", "Failed to parse tap response: ${e.message}", LogLevel.ERROR)
                     }
-                } catch (e: Exception) {
-                    log("Agent", "Failed to parse tap response: ${e.message}", LogLevel.ERROR)
                 }
+            } finally {
+                _isAgentInteracting.value = false
             }
         }
     }
 
     fun performCoordinateTap(x: Int, y: Int) {
+        if (_isAgentInteracting.value) return
         viewModelScope.launch {
-            log("Agent", "Simulating tap at coordinate ($x, $y)", LogLevel.INFO)
-            val response = adbRepository.tapCoordinate(x, y)
+            _isAgentInteracting.value = true
+            try {
+                log("Agent", "Simulating tap at coordinate ($x, $y)", LogLevel.INFO)
+                val response = adbRepository.tapCoordinate(x, y)
 
-            if (response != null && response.isNotEmpty()) {
-                try {
-                    val gson = Gson()
-                    val dumpResult = gson.fromJson(response, DumpResult::class.java)
-                    if (dumpResult != null && dumpResult.status == "ok") {
-                        val afterTimestamp = System.currentTimeMillis()
-                        val afterJsonDump = dumpResult.output
-                        val afterScreenshot = dumpResult.screenshot ?: ""
+                if (response != null && response.isNotEmpty()) {
+                    try {
+                        val gson = Gson()
+                        val dumpResult = gson.fromJson(response, DumpResult::class.java)
+                        if (dumpResult != null && dumpResult.status == "ok") {
+                            val afterTimestamp = System.currentTimeMillis()
+                            val afterJsonDump = dumpResult.output
+                            val afterScreenshot = dumpResult.screenshot ?: ""
 
-                        lastRawScreenshotBase64 = afterScreenshot
+                            lastRawScreenshotBase64 = afterScreenshot
 
-                        val afterSnapshot = Snapshot(
-                            timestamp = afterTimestamp,
-                            jsonDump = afterJsonDump,
-                            screenshotBase64 = afterScreenshot
-                        )
-
-                        val newRecord = TimelineItem.Record(
-                            id = "rec_$afterTimestamp",
-                            timestamp = afterTimestamp,
-                            snapshot = afterSnapshot,
-                            hasChange = true,
-                            eventLabel = "Tap",
-                            actionDetails = ActionDetails(
-                                command = "tap",
-                                args = mapOf("x" to x, "y" to y)
+                            val afterSnapshot = Snapshot(
+                                timestamp = afterTimestamp,
+                                jsonDump = afterJsonDump,
+                                screenshotBase64 = afterScreenshot
                             )
-                        )
 
-                        val currentList = _timelineItems.value.toMutableList()
-                        currentList.add(newRecord)
-                        if (currentList.size > 36) {
-                            currentList.removeAt(0)
+                            val newRecord = TimelineItem.Record(
+                                id = "rec_$afterTimestamp",
+                                timestamp = afterTimestamp,
+                                snapshot = afterSnapshot,
+                                hasChange = true,
+                                eventLabel = "Tap",
+                                actionDetails = ActionDetails(
+                                    command = "tap",
+                                    args = mapOf("x" to x, "y" to y)
+                                )
+                            )
+
+                            val currentList = _timelineItems.value.toMutableList()
+                            currentList.add(newRecord)
+                            if (currentList.size > 36) {
+                                currentList.removeAt(0)
+                            }
+                            _timelineItems.value = currentList
+                            _selectedTimelineIndex.value = currentList.size - 1
+
+                            updateActiveSnapshot(afterSnapshot, dumpResult.screen_width, dumpResult.screen_height)
+                            saveArtifact(afterScreenshot, afterJsonDump)
                         }
-                        _timelineItems.value = currentList
-                        _selectedTimelineIndex.value = currentList.size - 1
-
-                        updateActiveSnapshot(afterSnapshot, dumpResult.screen_width, dumpResult.screen_height)
-                        saveArtifact(afterScreenshot, afterJsonDump)
+                    } catch (e: Exception) {
+                        log("Agent", "Failed to parse coordinate tap response: ${e.message}", LogLevel.ERROR)
                     }
-                } catch (e: Exception) {
-                    log("Agent", "Failed to parse coordinate tap response: ${e.message}", LogLevel.ERROR)
                 }
+            } finally {
+                _isAgentInteracting.value = false
             }
         }
     }
@@ -525,11 +537,17 @@ class ToolViewModel : ViewModel(), KoinComponent {
     }
 
     fun pressHardwareKey(keycode: String) {
+        if (_isAgentInteracting.value) return
         viewModelScope.launch {
-            log("Agent", "Pressing hardware key: $keycode", LogLevel.INFO)
-            val response = adbRepository.pressKey(keycode)
-            delay(500L)
-            dumpMuttonAgent(silent = true)
+            _isAgentInteracting.value = true
+            try {
+                log("Agent", "Pressing hardware key: $keycode", LogLevel.INFO)
+                val response = adbRepository.pressKey(keycode)
+                delay(500L)
+                dumpMuttonAgent(silent = true)
+            } finally {
+                _isAgentInteracting.value = false
+            }
         }
     }
 
@@ -581,6 +599,9 @@ class ToolViewModel : ViewModel(), KoinComponent {
     // UI Inspector nested history properties
     private val _leftPanelMode = MutableStateFlow(0) // 0: UI Tree View, 1: History View
     val leftPanelMode = _leftPanelMode.asStateFlow()
+
+    private val _isAgentInteracting = MutableStateFlow(false)
+    val isAgentInteracting = _isAgentInteracting.asStateFlow()
 
     private val _layoutHistory = MutableStateFlow<List<LayoutHistoryItem>>(emptyList())
     val layoutHistory = _layoutHistory.asStateFlow()
