@@ -18,6 +18,13 @@ class AdbRepository {
     val logcatFlush: SharedFlow<Unit> = adbObserver.logcatFlush
     val screenshotStream: SharedFlow<String> = adbObserver.screenshotStream
 
+    val isAdbKillSwitchActive: Boolean
+        get() = adbObserver.isAdbKillSwitchActive
+
+    fun setAdbKillSwitch(active: Boolean) {
+        adbObserver.setAdbKillSwitch(active)
+    }
+
     init {
         scope.launch {
             adbObserver.observeAdb()

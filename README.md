@@ -99,12 +99,35 @@ TestBed Core exposes its device control and test execution APIs as a Model Conte
 
 While TestBed Core runs an SSE (Server-Sent Events) network server at `http://localhost:11452/mcp` on port 11452, direct HTTP/SSE connections from LLM agents (like Antigravity) can sometimes suffer from network socket hangs or polling delays.
 
-To resolve this, we provide a **Stdio-to-SSE Bridge** script: `scripts/mcp_stdio_bridge.py` (which is bundled inside the released packages under the `scripts/` directory). This script starts a stable, local Stdio channel for the LLM agent and proxies all JSON-RPC requests to the background Ktor SSE server.
+To resolve this, we provide a **Stdio-to-SSE Bridge** utility. You can choose between the Python script or the new lightweight, zero-dependency Kotlin/JVM executable.
 
-#### How to configure in Antigravity / Cline
+#### Option A: Kotlin/JVM Bridge (Recommended - Python-less)
+This runs using your host's JRE without requiring Python. It dynamically queries and caches the tool catalog from the running server, eliminating the need to manually sync tool definitions.
 
-Add the following to your `mcp_config.json` configuration file:
+Build the bridge and wrappers first:
+```bash
+./gradlew :tools:mcp-bridge:assemble
+```
 
+Add the following to your `mcp_config.json` (pointing directly to the generated execution wrapper):
+```json
+{
+  "mcpServers": {
+    "testbed-core": {
+      "command": "/path/to/testbed-core/tools/mcp-bridge/build/libs/testbed-cli",
+      "args": [
+        "--host", "localhost",
+        "--port", "11452"
+      ]
+    }
+  }
+}
+```
+*(For Windows environments, use `testbed-cli.bat` instead.)*
+```
+
+#### Option B: Python Bridge
+Requires Python 3 installed. Add the following to your `mcp_config.json`:
 ```json
 {
   "mcpServers": {

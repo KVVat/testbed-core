@@ -184,6 +184,38 @@ class AdbObserver(private val scope: CoroutineScope) {
     private val _adbState = MutableStateFlow(AdbState())
     val adbState = _adbState.asStateFlow()
 
+    @Volatile
+    var isAdbKillSwitchActive = false
+        private set
+
+    fun setAdbKillSwitch(active: Boolean) {
+        isAdbKillSwitchActive = active
+        if (active) {
+            log("AdbObserver", "ADB Kill Switch ON: Stopping connection loop and killing host adb server.", LogLevel.INFO)
+            stopLogcat()
+            _adbState.value = AdbState(isValid = false, isUnauthorized = false)
+            
+            scope.launch(Dispatchers.IO) {
+                try {
+                    Runtime.getRuntime().exec(arrayOf("adb", "kill-server")).waitFor()
+                    log("AdbObserver", "Host ADB server killed successfully.", LogLevel.INFO)
+                } catch (e: Exception) {
+                    log("AdbObserver", "Failed to kill Host ADB server: ${e.message}", LogLevel.ERROR)
+                }
+            }
+        } else {
+            log("AdbObserver", "ADB Kill Switch OFF: Restarting Host ADB server.", LogLevel.INFO)
+            scope.launch(Dispatchers.IO) {
+                try {
+                    Runtime.getRuntime().exec(arrayOf("adb", "start-server")).waitFor()
+                    log("AdbObserver", "Host ADB server started successfully.", LogLevel.INFO)
+                } catch (e: Exception) {
+                    log("AdbObserver", "Failed to start Host ADB server: ${e.message}", LogLevel.ERROR)
+                }
+            }
+        }
+    }
+
     private val _logcatLines = MutableSharedFlow<String>(extraBufferCapacity = 1000)
     val logcatLines = _logcatLines.asSharedFlow()
 
@@ -561,6 +593,12 @@ class AdbObserver(private val scope: CoroutineScope) {
         checkDependencies()
 
         while (currentCoroutineContext().isActive) {
+            if (isAdbKillSwitchActive) {
+                _adbState.value = AdbState(isValid = false, isUnauthorized = false)
+                stopLogcat()
+                delay(1000)
+                continue
+            }
             var backgroundMonitorJob: Job? = null
             try {
                 // 1. 最速検知ループ (そのまま)

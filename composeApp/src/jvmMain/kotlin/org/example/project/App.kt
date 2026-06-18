@@ -71,6 +71,7 @@ fun App() {
     val uiState by viewModel.uiState.collectAsState()
     val isLogcatWindowOpen by toolViewModel.isToolWindowOpen.collectAsState()
     val scope = rememberCoroutineScope()
+    val isAdbKilled by toolViewModel.isAdbKillSwitchActive.collectAsState()
     val drawerState =
         androidx.compose.material3.rememberDrawerState(initialValue =
             androidx.compose.material3.DrawerValue.Closed)
@@ -138,7 +139,8 @@ fun App() {
                         onRunTest = { viewModel.runTest(it) },
                         onRefreshPlugins = { viewModel.refreshPlugins() },
                         onMenuClick = { scope.launch { drawerState.open() } },
-                        onSetupAgentClick = { viewModel.setupMuttonAgent() },
+                        isAdbKillSwitchActive = isAdbKilled,
+                        onAdbKillSwitchToggle = { toolViewModel.toggleAdbKillSwitch() },
                         onLogcatClick = { toolViewModel.openWindow() }
                     )
                 },
@@ -481,7 +483,8 @@ fun TopControlBar(
     onDeviceInfoClick: () -> Unit,
     onRefreshPlugins: () -> Unit,
     onMenuClick: () -> Unit,
-    onSetupAgentClick: () -> Unit,
+    isAdbKillSwitchActive: Boolean,
+    onAdbKillSwitchToggle: () -> Unit,
     onLogcatClick: () -> Unit
 ) {
     TopAppBar(
@@ -548,16 +551,16 @@ fun TopControlBar(
                 }
                 Divider(Modifier.height(24.dp).width(1.dp).padding(horizontal = 8.dp), color = Color.Gray)
 
-                // ★追加: 羊（Mutton Agent）デプロイボタン
+                // ADB Kill Switch Toggle Button
                 TooltipIconButton(
-                    onClick = onSetupAgentClick,
-                    tooltip = "Deploy Mutton Agent",
-                    enabled = adbConnected
+                    onClick = onAdbKillSwitchToggle,
+                    tooltip = if (isAdbKillSwitchActive) "Restore ADB Connection (Switch OFF)" else "Kill ADB Connection (Switch ON)",
+                    enabled = true
                 ) {
                     Icon(
-                        painter = painterResource(Res.drawable.ic_sheep),
-                        contentDescription = "Deploy Mutton Agent",
-                        tint = if (adbConnected) Color(0xFF569CD6) else Color.Gray,
+                        imageVector = Icons.Default.Usb,
+                        contentDescription = "ADB Kill Switch",
+                        tint = if (isAdbKillSwitchActive) Color(0xFFE06C75) else Color(0xFF6B9F78),
                         modifier = Modifier.size(24.dp)
                     )
                 }

@@ -15,7 +15,7 @@ This document tracks planned features, refactoring tasks, and UI/UX improvements
 
 ---
 
-## 1.5. TestBed CLI Submodule (Python-less Stdio-to-SSE Bridge)
+## 1.5. TestBed CLI Submodule (Python-less Stdio-to-SSE Bridge) - [COMPLETED]
 
 ### Background
 LLM clients (like Antigravity and Cline) communicate with MCP servers using a Stdio stream. Since TestBed Core runs a background Server-Sent Events (SSE) server over Ktor, we currently bridge the Stdio-to-SSE channel using a Python script (`mcp_stdio_bridge.py`). This forces end-users to install Python 3 on their host machines, breaking the project's "zero-dependency, portable deployment" philosophy.

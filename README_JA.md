@@ -103,12 +103,35 @@ TestBed Core は、デバイス制御およびテスト実行 API を Model Cont
 
 TestBed Core はポート 11452 の `http://localhost:11452/mcp` で SSE (Server-Sent Events) サーバーを動作させますが、LLM エージェント (Antigravity など) からの直接の HTTP/SSE 接続は、ネットワークの瞬断やポーリング遅延の影響を受ける場合があります。
 
-安定性を最大化するため、ローカルの stdio チャンネルを中継する **Stdio-to-SSE ブリッジ** スクリプト `scripts/mcp_stdio_bridge.py` を提供しています。
+安定性を最大化するため、ローカルの stdio チャンネルを中継する **Stdio-to-SSE ブリッジ** ユーティリティを提供しています。Pythonスクリプトと、新しく追加された軽量・自己完結型の Kotlin/JVM 実行可能ファイルのどちらかを選択できます。
 
-#### Antigravity / Cline での設定例
+#### オプションA: Kotlin/JVM ブリッジ (推奨 - Python不要)
+ホスト環境の JRE（Java）を使って動作するため、Python 3 のインストールが不要です。また、起動中のサーバーから最新のツール定義カタログを動的に取得してキャッシュするため、ツールの追加・削除時にブリッジ設定を手動更新する必要がありません。
 
-`mcp_config.json` に以下の設定を追加してください：
+事前にブリッジとラッパースクリプトをビルドします：
+```bash
+./gradlew :tools:mcp-bridge:assemble
+```
 
+`mcp_config.json` に以下の設定を追加します（生成されたラッパースクリプトのパスを直接指定します）：
+```json
+{
+  "mcpServers": {
+    "testbed-core": {
+      "command": "/path/to/testbed-core/tools/mcp-bridge/build/libs/testbed-cli",
+      "args": [
+        "--host", "localhost",
+        "--port", "11452"
+      ]
+    }
+  }
+}
+```
+*(Windows環境の場合は、`testbed-cli.bat` を指定してください。)*
+```
+
+#### オプションB: Python ブリッジ
+Python 3 のインストールが必要です。`mcp_config.json` に以下の設定を追加します：
 ```json
 {
   "mcpServers": {

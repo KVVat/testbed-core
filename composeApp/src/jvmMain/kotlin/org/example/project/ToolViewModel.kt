@@ -370,6 +370,10 @@ class ToolViewModel : ViewModel(), KoinComponent {
     }
 
     fun performTap(node: UiNode) {
+        if (_isAdbKillSwitchActive.value) {
+            showSnackbar("ADB connection is killed.")
+            return
+        }
         if (_isAgentInteracting.value) return
         viewModelScope.launch {
             _isAgentInteracting.value = true
@@ -434,6 +438,10 @@ class ToolViewModel : ViewModel(), KoinComponent {
     }
 
     fun performCoordinateTap(x: Int, y: Int) {
+        if (_isAdbKillSwitchActive.value) {
+            showSnackbar("ADB connection is killed.")
+            return
+        }
         if (_isAgentInteracting.value) return
         viewModelScope.launch {
             _isAgentInteracting.value = true
@@ -537,6 +545,10 @@ class ToolViewModel : ViewModel(), KoinComponent {
     }
 
     fun pressHardwareKey(keycode: String) {
+        if (_isAdbKillSwitchActive.value) {
+            showSnackbar("ADB connection is killed.")
+            return
+        }
         if (_isAgentInteracting.value) return
         viewModelScope.launch {
             _isAgentInteracting.value = true
@@ -599,6 +611,20 @@ class ToolViewModel : ViewModel(), KoinComponent {
     // UI Inspector nested history properties
     private val _leftPanelMode = MutableStateFlow(0) // 0: UI Tree View, 1: History View
     val leftPanelMode = _leftPanelMode.asStateFlow()
+
+    private val _isAdbKillSwitchActive = MutableStateFlow(adbRepository.isAdbKillSwitchActive)
+    val isAdbKillSwitchActive = _isAdbKillSwitchActive.asStateFlow()
+
+    fun toggleAdbKillSwitch() {
+        val nextState = !_isAdbKillSwitchActive.value
+        _isAdbKillSwitchActive.value = nextState
+        adbRepository.setAdbKillSwitch(nextState)
+        if (nextState) {
+            showSnackbar("ADB connection KILLED (Switch ON)")
+        } else {
+            showSnackbar("ADB connection RESTORED (Switch OFF)")
+        }
+    }
 
     private val _isAgentInteracting = MutableStateFlow(false)
     val isAgentInteracting = _isAgentInteracting.asStateFlow()
