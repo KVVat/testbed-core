@@ -54,6 +54,7 @@ class AdbObserver(private val scope: CoroutineScope) {
     
     private var pendingLogLine: LogLine? = null
 
+    @Synchronized
     private fun handleLogcatLineForRecord(rawLine: String) {
         if (LogcatParser.isHeader(rawLine)) {
             flushPendingLogRecord()
@@ -73,7 +74,8 @@ class AdbObserver(private val scope: CoroutineScope) {
         }
     }
 
-    private fun flushPendingLogRecord() {
+    @Synchronized
+    fun flushPendingLogRecord() {
         pendingLogLine?.let { log ->
             if (log.message.isNotBlank()) {
                 logRecorder.write(log)
@@ -1008,6 +1010,7 @@ class AdbObserver(private val scope: CoroutineScope) {
         maxLines: Int, 
         process: String = ""
     ): String {
+        flushPendingLogRecord()
         val logFile = File(baseDir, "logcat.log")
         if (!logFile.exists()) return "Error: Log file not found."
 

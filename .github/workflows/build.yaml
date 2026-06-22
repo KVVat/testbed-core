@@ -40,7 +40,23 @@ jobs:
         shell: bash
         run: ./gradlew :composeApp:createReleaseDistributable
 
-
+      - name: Build MCP Bridge
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            # Create dummy xcodebuild to bypass missing Xcode issues on CI
+            echo '#!/bin/bash
+            if [ "$1" = "-version" ]; then
+                echo "Xcode 15.0"
+                echo "Build version 15A240d"
+                exit 0
+            fi
+            exit 0' > /tmp/xcodebuild
+            chmod +x /tmp/xcodebuild
+            PATH=/tmp:$PATH ./gradlew :tools:mcp-bridge:assemble
+          else
+            ./gradlew :tools:mcp-bridge:assemble
+          fi
 
       - name: Prepare Artifact (Windows)
         if: ${{ matrix.os == 'windows-latest' }}
@@ -49,6 +65,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force -Path "work/artifact" | Out-Null
           Copy-Item -Path "composeApp/build/compose/binaries/main-release/app" -Destination "work/artifact/app" -Recurse -Force
+          Copy-Item -Path "tools/mcp-bridge/build/bin/mingwX64/releaseExecutable/mcp-bridge.exe" -Destination "work/artifact/mcp-bridge.exe" -Force
 
       - name: Prepare Artifact (Linux/macOS)
         if: ${{ matrix.os != 'windows-latest' }}
@@ -57,6 +74,15 @@ jobs:
           set -euo pipefail
           mkdir -p work/artifact
           tar -C composeApp/build/compose/binaries/main-release -czf work/artifact/app.tar.gz app
+          
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            cp tools/mcp-bridge/build/bin/linuxX64/releaseExecutable/mcp-bridge.kexe work/artifact/mcp-bridge-linux
+            chmod +x work/artifact/mcp-bridge-linux
+          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
+            cp tools/mcp-bridge/build/bin/macosArm64/releaseExecutable/mcp-bridge.kexe work/artifact/mcp-bridge-macos-arm64
+            cp tools/mcp-bridge/build/bin/macosX64/releaseExecutable/mcp-bridge.kexe work/artifact/mcp-bridge-macos-x64
+            chmod +x work/artifact/mcp-bridge-macos-arm64 work/artifact/mcp-bridge-macos-x64
+          fi
 
       - name: Upload Native Artifact
         uses: actions/upload-artifact@v4

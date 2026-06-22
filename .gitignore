@@ -50,3 +50,7 @@ composeApp/ui_artifacts
 results/
 xml-patches/
 composeApp/*.properties
+
+# MCP Native bridge binary
+tools/mcp-bridge.kexe
+*.kexe

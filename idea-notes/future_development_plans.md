@@ -64,3 +64,9 @@ Introduce a global **"ADB Kill-Switch"** toggle inside the Host Application GUI 
 * **Background**: Continuous streaming commands (`start_stream`, `start_dump_stream`) are resource-heavy and have been superseded by the checkpoint-based DB archiver.
 * **Proposed Implementation**:
   * Remove unused stream handlers, background thread loops, and related variables from `AgentTest.kt` to clean up the code.
+
+**メモ**
+画像の取得をさせるmcp命令=>dumpを画像付きで=>historyで現在でも取得可能
+=>問題点ファイルサイズが原寸(jpgにして渡さないとコンテキスト圧迫する)
+=>コマンドが多段で理解が困難。圧縮後のファイルを渡す? ファイルがいいかBase64がいいか。
+内部的にはどうもつのか? ImageContent形式で1024px幅か1024高さのjpegとして戻す。

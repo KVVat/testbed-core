@@ -17,13 +17,12 @@ This specification defines the complete set of MCP tools exposed by TestBed Core
   * Fast execution: Plain text of the dump (or JSON structure if format is json).
   * Long execution: `{"status": "running", "task_id": "UUID-string"}`.
 
-### `get_screen_dump`
-* **Description:** Retrieves the current UI hierarchy and a mandatory screenshot. Saves the layout and image internally to the history database.
+### `get_screen`
+* **Description:** Captures a screenshot of the connected device. Resizes the image to fit within a 1024x1024 bounding box (maintaining aspect ratio) and compresses it as a JPEG. If a tag is provided, the layout and screenshot are saved to the history DB.
 * **Parameters:**
-  * `image_quality` (int, optional, default: `4`): Image quality (1-4).
-  * `tag` (string, optional): Custom key string to tag the saved screen layout.
-  * `format` (string, optional, default: `"summary"`): Output format (`"summary"` or `"json"`).
-* **Returns:** UI dump output similar to `get_ui_dump`.
+  * `tag` (string, optional): Optional custom string key to tag the saved screen layout in history registry.
+* **Returns:** Purely an embedded base64 JPEG image (`ImageContent` format) representing the screenshot. Useful for multimodal LLM context ingestion without text layout overhead.
+
 
 ### `get_ui_dump_history`
 * **Description:** Retrieves a historical UI layout dump by UUID, Tag, or latest relative Index.
@@ -35,9 +34,9 @@ This specification defines the complete set of MCP tools exposed by TestBed Core
 * **Returns:** The historical UI hierarchy text. The metadata footer includes `png_path` containing the absolute local file path of the captured screenshot, enabling direct image access without Base64 overhead.
 
 ### `receive_ui_dump`
-* **Description:** Polls and retrieves the UI dump output of a pending background task initiated by `get_ui_dump` or `get_screen_dump`.
+* **Description:** Polls and retrieves the UI dump output of a pending background task initiated by `get_ui_dump`.
 * **Parameters:**
-  * `task_id` (string, required): The task ID returned by `get_ui_dump` or `get_screen_dump`.
+  * `task_id` (string, required): The task ID returned by `get_ui_dump`.
 * **Returns:** UI dump output if completed, OR a JSON containing `status: "running"` if still active.
 
 ### `get_device_state`
@@ -144,7 +143,7 @@ Action tools trigger physical user interface operations on the device. They exec
 ## 4. Observe Tools (Diagnostics & Logs)
 
 ### `get_logcat`
-* **Description:** Fetches filtered logcat records. Crucial for extracting target app errors without polluting LLM token context.
+* **Description:** Fetches filtered logcat records from local host stream (100x faster with zero process-spawning overhead, highly recommended over running raw `adb shell logcat` via `execute_adb_shell`). Crucial for extracting target app errors without polluting LLM token context.
 * **Parameters:**
   * `tags` (string array, optional, default: `[]`): Filter logs matching specific tags.
   * `level` (string, optional, default: `"V"`): Minimum severity level threshold (`V`, `D`, `I`, `W`, `E`, `F`).

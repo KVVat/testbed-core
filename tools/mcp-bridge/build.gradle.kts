@@ -1,102 +1,117 @@
 plugins {
-    kotlin("jvm")
+    kotlin("multiplatform")
 }
 
 repositories {
     mavenCentral()
 }
 
-dependencies {
-    implementation(kotlin("stdlib"))
+kotlin {
+    // 1. JVM Target
+    jvm {
+        withJava()
+    }
+
+    // 2. Native Target based on Host OS to avoid cross-compilation errors
+    val hostOs = System.getProperty("os.name").lowercase()
+    when {
+        hostOs.contains("mac") -> {
+            macosX64 {
+                binaries { executable { entryPoint = "org.example.project.mcp.main" } }
+            }
+            macosArm64 {
+                binaries { executable { entryPoint = "org.example.project.mcp.main" } }
+            }
+        }
+        hostOs.contains("win") -> {
+            mingwX64 {
+                binaries { executable { entryPoint = "org.example.project.mcp.main" } }
+            }
+        }
+        hostOs.contains("nux") || hostOs.contains("nand") -> {
+            linuxX64 {
+                binaries { executable { entryPoint = "org.example.project.mcp.main" } }
+            }
+        }
+    }
+
+    sourceSets {
+        val commonMain by getting {
+            dependencies {
+                implementation("io.ktor:ktor-client-core:3.2.3")
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+            }
+        }
+        val jvmMain by getting {
+            dependencies {
+                implementation("io.ktor:ktor-client-cio:3.2.3")
+            }
+        }
+        
+        val nativeMain by creating {
+            dependsOn(commonMain)
+        }
+
+        if (hostOs.contains("mac")) {
+            val macosX64Main by getting { dependsOn(nativeMain) }
+            val macosArm64Main by getting { dependsOn(nativeMain) }
+            macosX64Main.dependencies { implementation("io.ktor:ktor-client-darwin:3.2.3") }
+            macosArm64Main.dependencies { implementation("io.ktor:ktor-client-darwin:3.2.3") }
+        }
+        if (hostOs.contains("win")) {
+            val mingwX64Main by getting { dependsOn(nativeMain) }
+            mingwX64Main.dependencies { implementation("io.ktor:ktor-client-winhttp:3.2.3") }
+        }
+        if (hostOs.contains("nux") || hostOs.contains("nand")) {
+            val linuxX64Main by getting { dependsOn(nativeMain) }
+            linuxX64Main.dependencies { implementation("io.ktor:ktor-client-curl:3.2.3") }
+        }
+    }
 }
 
-tasks.jar {
-    archiveFileName.set("mcp-bridge.jar")
+tasks.named<Jar>("jvmJar") {
     manifest {
         attributes["Main-Class"] = "org.example.project.mcp.StdioBridgeKt"
     }
-    // Pack Kotlin stdlib classes into the JAR for standalone execution
-    from(configurations.runtimeClasspath.get().map { if (it.isDirectory) it else zipTree(it) })
-    
+    val runtimeClasspath = configurations.named("jvmRuntimeClasspath").get()
+    from(runtimeClasspath.map { if (it.isDirectory) it else zipTree(it) })
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
-// Generate native-like transparent script wrappers on build completion
-val createCliWrappers by tasks.registering {
-    dependsOn(tasks.jar)
-    
-    val outputDir = layout.buildDirectory.dir("libs")
-    
-    doLast {
-        val macLinuxScript = outputDir.get().file("testbed-cli").asFile
-        val windowsScript = outputDir.get().file("testbed-cli.bat").asFile
+// Copy compiled native executable to tools/ root directory (macOS only)
+val copyNativeBridgeToTools by tasks.registering {
+    val hostOs = System.getProperty("os.name").lowercase()
+    if (hostOs.contains("mac")) {
+        dependsOn("linkReleaseExecutableMacosArm64")
         
-        // macOS / Linux wrapper script
-        macLinuxScript.writeText("""
-            #!/bin/bash
-            # Automatically resolve path relative to this script directory
-            SCRIPT_DIR="${'$'}(cd "${'$'}(dirname "${'$'}0")" && pwd)"
-            
-            # 1. Try to find the bundled runtime in the app package structure
-            JAVA_EXEC=""
-            if [ -x "${'$'}SCRIPT_DIR/../runtime/Contents/Home/bin/java" ]; then
-                JAVA_EXEC="${'$'}SCRIPT_DIR/../runtime/Contents/Home/bin/java"
-            elif [ -x "${'$'}SCRIPT_DIR/../../runtime/Contents/Home/bin/java" ]; then
-                JAVA_EXEC="${'$'}SCRIPT_DIR/../../runtime/Contents/Home/bin/java"
-            elif [ -x "${'$'}SCRIPT_DIR/../runtime/bin/java" ]; then
-                JAVA_EXEC="${'$'}SCRIPT_DIR/../runtime/bin/java"
-            elif [ -x "${'$'}SCRIPT_DIR/../../runtime/bin/java" ]; then
-                JAVA_EXEC="${'$'}SCRIPT_DIR/../../runtime/bin/java"
-            fi
-            
-            # 2. Fallback to JAVA_HOME
-            if [ -z "${'$'}JAVA_EXEC" ] && [ -n "${'$'}JAVA_HOME" ] && [ -x "${'$'}JAVA_HOME/bin/java" ]; then
-                JAVA_EXEC="${'$'}JAVA_HOME/bin/java"
-            fi
-            
-            # 3. Fallback to system java
-            if [ -z "${'$'}JAVA_EXEC" ]; then
-                JAVA_EXEC="java"
-            fi
-            
-            exec "${'$'}JAVA_EXEC" -jar "${'$'}SCRIPT_DIR/mcp-bridge.jar" "${'$'}@"
-        """.trimIndent().replace("\r\n", "\n"))
-        macLinuxScript.setExecutable(true, false)
+        val pDir = projectDir
+        val toolsDir = pDir.parentFile // rootProject/tools/
         
-        // Windows wrapper batch file
-        windowsScript.writeText("""
-            @echo off
-            set SCRIPT_DIR=%~dp0
-            set JAVA_EXEC=
-            
-            :: 1. Try to find bundled runtime in app package
-            if exist "%SCRIPT_DIR%..\runtime\bin\java.exe" (
-                set JAVA_EXEC="%SCRIPT_DIR%..\runtime\bin\java.exe"
-            ) else if exist "%SCRIPT_DIR%..\..\runtime\bin\java.exe" (
-                set JAVA_EXEC="%SCRIPT_DIR%..\..\runtime\bin\java.exe"
-            )
-            
-            :: 2. Fallback to JAVA_HOME
-            if not defined JAVA_EXEC (
-                if defined JAVA_HOME (
-                    if exist "%JAVA_HOME%\bin\java.exe" (
-                        set JAVA_EXEC="%JAVA_HOME%\bin\java.exe"
-                    )
-                )
-            )
-            
-            :: 3. Fallback to system path java
-            if not defined JAVA_EXEC (
-                set JAVA_EXEC=java
-            )
-            
-            %JAVA_EXEC% -jar "%SCRIPT_DIR%mcp-bridge.jar" %*
-        """.trimIndent().replace("\n", "\r\n"))
+        inputs.file(File(pDir, "build/bin/macosArm64/releaseExecutable/mcp-bridge.kexe"))
+        outputs.file(File(toolsDir, "mcp-bridge.kexe"))
         
-        println("✅ Stdio Bridge CLI wrappers generated at: ${outputDir.get().asFile.absolutePath}")
+        doLast {
+            val srcFile = File(pDir, "build/bin/macosArm64/releaseExecutable/mcp-bridge.kexe")
+            val destFile = File(toolsDir, "mcp-bridge.kexe")
+            
+            toolsDir.mkdirs()
+            
+            if (srcFile.exists()) {
+                srcFile.copyTo(destFile, overwrite = true)
+                destFile.setExecutable(true, false)
+                println("✅ Copied Native Bridge binary to: ${destFile.absolutePath}")
+            } else {
+                val x64File = File(pDir, "build/bin/macosX64/releaseExecutable/mcp-bridge.kexe")
+                if (x64File.exists()) {
+                    x64File.copyTo(destFile, overwrite = true)
+                    destFile.setExecutable(true, false)
+                    println("✅ Copied Native Bridge (x64) binary to: ${destFile.absolutePath}")
+                }
+            }
+        }
     }
 }
 
 tasks.assemble {
-    dependsOn(createCliWrappers)
+    dependsOn(copyNativeBridgeToTools)
 }

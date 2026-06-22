@@ -102,6 +102,7 @@ jobs:
           Copy-Item -Path "scripts/mcp_stdio_bridge.py" -Destination "$OutDir\scripts\mcp_stdio_bridge.py" -Force
           Copy-Item -Path "pkg-items/testbed-windows.bat" -Destination "$OutDir\testbed-windows.bat" -Force
           Copy-Item -Path "pkg-items/README_WINDOWS.md" -Destination "$OutDir\README.md" -Force
+          Copy-Item -Path "work/raw/mcp-bridge.exe" -Destination "$OutDir\bin\mcp-bridge.exe" -Force
 
       - name: Repackage (Ubuntu)
         if: ${{ matrix.os == 'ubuntu-latest' }}
@@ -125,7 +126,11 @@ jobs:
           cp scripts/mcp_stdio_bridge.py "$out_dir/scripts/mcp_stdio_bridge.py"
           cp pkg-items/testbed-ubuntu.sh "$out_dir/testbed-ubuntu.sh"
           cp pkg-items/README_UBUNTU.md "$out_dir/README.md"
-          chmod +x "$out_dir/testbed-ubuntu.sh" "$out_dir/scripts/setup_tools.sh" "$out_dir/scripts/mcp_stdio_bridge.py"
+          
+          # Copy compiled Linux MCP native bridge
+          cp work/raw/mcp-bridge-linux "$out_dir/bin/mcp-bridge"
+          
+          chmod +x "$out_dir/testbed-ubuntu.sh" "$out_dir/scripts/setup_tools.sh" "$out_dir/scripts/mcp_stdio_bridge.py" "$out_dir/bin/mcp-bridge"
           if [ -d "$out_dir/main-release/app/TestbedCore/bin" ]; then
             find "$out_dir/main-release/app/TestbedCore/bin" -type f -exec chmod +x {} +
           fi
@@ -147,10 +152,23 @@ jobs:
 
           cp -R "$app_bundle" "$out_dir/"
           cp pkg-items/README_MACOS.md "$out_dir/README.md"
-          mkdir -p "$out_dir/scripts"
+          mkdir -p "$out_dir/scripts" "$out_dir/bin"
           cp scripts/mcp_stdio_bridge.py "$out_dir/scripts/mcp_stdio_bridge.py"
           chmod +x "$out_dir/scripts/mcp_stdio_bridge.py"
           
+          # Copy compiled macOS MCP native bridge (support both Arm64 and x64)
+          if [ -f "work/raw/mcp-bridge-macos-arm64" ]; then
+            cp work/raw/mcp-bridge-macos-arm64 "$out_dir/bin/mcp-bridge"
+            cp work/raw/mcp-bridge-macos-arm64 "$out_dir/TestbedCore.app/Contents/MacOS/mcp-bridge"
+          elif [ -f "work/raw/mcp-bridge-macos-x64" ]; then
+            cp work/raw/mcp-bridge-macos-x64 "$out_dir/bin/mcp-bridge"
+            cp work/raw/mcp-bridge-macos-x64 "$out_dir/TestbedCore.app/Contents/MacOS/mcp-bridge"
+          fi
+          
+          chmod +x "$out_dir/bin/mcp-bridge"
+          if [ -f "$out_dir/TestbedCore.app/Contents/MacOS/mcp-bridge" ]; then
+            chmod +x "$out_dir/TestbedCore.app/Contents/MacOS/mcp-bridge"
+          fi
 
           if [ -d "$out_dir/TestbedCore.app/Contents/MacOS" ]; then
             find "$out_dir/TestbedCore.app/Contents/MacOS" -type f -exec chmod +x {} +

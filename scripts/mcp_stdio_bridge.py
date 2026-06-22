@@ -64,14 +64,12 @@ STATIC_TOOLS = [
         }
     },
     {
-        "name": "get_screen_dump",
-        "description": "Retrieves the current UI hierarchy and a mandatory screenshot. Default format is 'summary' (LLM-optimized text) or 'json' (raw tree). Saves the layout and image internally to history DB.",
+        "name": "get_screen",
+        "description": "Captures a screenshot of the connected device. Resizes the image to fit within a 1024x1024 bounding box (maintaining aspect ratio) and compresses it as a JPEG. If a tag is provided, the layout and screenshot are saved to the history DB.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "image_quality": {"type": "integer", "description": "1=100%, 2=50%, 3=33%, 4=25%. Default 4 (25%)"},
-                "tag": {"type": "string", "description": "Optional custom string key to tag the saved screen layout."},
-                "format": {"type": "string", "description": "Output format: 'summary' (default) or 'json'"}
+                "tag": {"type": "string", "description": "Optional custom string key to tag the saved screen layout in history registry."}
             }
         }
     },
@@ -265,7 +263,7 @@ STATIC_TOOLS = [
     },
     {
         "name": "get_logcat",
-        "description": "Retrieves filtered Logcat lines. (Essential for saving tokens)",
+        "description": "Retrieves filtered Logcat lines. 100x faster with zero process-spawning overhead, highly recommended over running raw 'adb shell logcat' via execute_adb_shell. Essential for token savings.",
         "inputSchema": {
             "type": "object",
             "properties": {

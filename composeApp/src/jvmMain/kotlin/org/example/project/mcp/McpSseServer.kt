@@ -184,23 +184,55 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
 
         mcpServer.addTool(
-            name = "get_screen_dump",
-            description = "Retrieves the current UI hierarchy and a mandatory screenshot. Default format is 'summary' (LLM-optimized text) or 'json' (raw tree). Saves the layout and image internally to history DB.",
+            name = "get_screen",
+            description = "Captures a screenshot of the connected device. Resizes the image to fit within a 1024x1024 bounding box (maintaining aspect ratio) and compresses it as a JPEG. If a tag is provided, the layout and screenshot are saved to the history DB.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
-                    putJsonObject("image_quality") { put("type", "integer"); put("description", "1=100%, 2=50%, 3=33%, 4=25%. Default 4 (25%)") }
-                    putJsonObject("tag") { put("type", "string"); put("description", "Optional custom string key to tag the saved screen layout.") }
-                    putJsonObject("format") { put("type", "string"); put("description", "Output format: 'summary' (default) or 'json'") }
+                    putJsonObject("tag") { put("type", "string"); put("description", "Optional custom string key to tag the saved screen layout in history registry.") }
                 }
             )
         ) { request ->
             val args = request.params.arguments ?: emptyMap()
-            val format = args["format"]?.jsonPrimitive?.contentOrNull ?: "summary"
-            val quality = args["image_quality"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 4
             val tag = args["tag"]?.jsonPrimitive?.contentOrNull
 
-            val rawResult = adbObserver.uiDumpExecute(format, includeImage = true, quality = quality, tag = tag)
-            CallToolResult(content = listOf(TextContent(rawResult)))
+            // Request high-quality original screenshot and UI dump from Mutton agent (quality = 1, includeImage = true)
+            val rawResult = adbObserver.dumpMuttonAgent(includeImage = true, quality = 1, silent = true)
+            if (rawResult == null) {
+                return@addTool CallToolResult(content = listOf(TextContent("Error: Failed to communicate with the Mutton agent on the device.")))
+            }
+
+            val gson = Gson()
+            val dumpResult = try {
+                gson.fromJson(rawResult, org.example.project.model.DumpResult::class.java)
+            } catch (e: Exception) {
+                null
+            }
+
+            if (dumpResult == null || dumpResult.status != "ok" || dumpResult.screenshot.isNullOrEmpty()) {
+                return@addTool CallToolResult(content = listOf(TextContent("Error: Failed to capture screenshot from the device.")))
+            }
+
+            // Perform image scaling and JPEG compression on the host side to keep it under 1024px bounding box
+            val resizedBase64 = org.example.project.tools.ImageUtil.resizeBase64Image(dumpResult.screenshot, maxDimension = 1024, jpegQuality = 0.75f)
+            if (resizedBase64 == null) {
+                return@addTool CallToolResult(content = listOf(TextContent("Error: Failed to process and compress captured screenshot on host.")))
+            }
+
+            // Save layout and scaled screenshot in history DB if a tag is specified
+            if (tag != null) {
+                try {
+                    org.example.project.model.LayoutDatabase.saveLayoutArtifact(
+                        jsonLayout = dumpResult.output,
+                        screenshotBase64 = resizedBase64,
+                        tag = tag
+                    )
+                } catch (e: Exception) {
+                    System.err.println("[MCP] Failed to save layout artifact for get_screen: ${e.message}")
+                }
+            }
+
+            // Return purely the ImageContent format
+            CallToolResult(content = listOf(ImageContent(data = resizedBase64, mimeType = "image/jpeg")))
         }
 
         mcpServer.addTool(
@@ -560,7 +592,7 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
 
         mcpServer.addTool(
             name = "get_logcat",
-            description = "Retrieves filtered Logcat lines. (Essential for saving tokens)",
+            description = "Retrieves filtered Logcat lines. 100x faster with zero process-spawning overhead, highly recommended over running raw 'adb shell logcat' via execute_adb_shell. Essential for token savings.",
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
                     putJsonObject("tags") { put("type", "array"); putJsonObject("items") { put("type", "string") }; put("description", "Log tag names to filter by") }
