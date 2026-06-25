@@ -65,8 +65,26 @@ Introduce a global **"ADB Kill-Switch"** toggle inside the Host Application GUI 
 * **Proposed Implementation**:
   * Remove unused stream handlers, background thread loops, and related variables from `AgentTest.kt` to clean up the code.
 
-**メモ**
-画像の取得をさせるmcp命令=>dumpを画像付きで=>historyで現在でも取得可能
-=>問題点ファイルサイズが原寸(jpgにして渡さないとコンテキスト圧迫する)
-=>コマンドが多段で理解が困難。圧縮後のファイルを渡す? ファイルがいいかBase64がいいか。
-内部的にはどうもつのか? ImageContent形式で1024px幅か1024高さのjpegとして戻す。
+## 3. Future Security & Diagnostics MCP Tools (The "dbg" Suite)
+
+### A. App Process Memory Zeroization Auditor (`audit_process_memory`)
+* **Background**: Proving that sensitive data (such as plain-text passwords, cryptographic keys, or session tokens) is completely wiped from RAM after use (zeroization) is a critical requirement for Common Criteria (MDFPP) certification (specifically `FCS_CKM_EXT.4`). Since modern Android Keystore utilizes native-backed cryptographic libraries (e.g., Conscrypt, BoringSSL), sensitive keys can easily leak into the **Native Heap** (C/C++ memory space), making them completely invisible to standard Java heap dumps.
+* **Proposed Implementation**:
+  * Since the testbed runs in a `root` (userdebug) environment, we can temporarily set SELinux to permissive mode via `setenforce 0` to bypass system-level sandbox restrictions.
+  * Extract the target service or application's PID (e.g., KeyMint HAL service `android.hardware.security.keymint-service` or the target app).
+  * Read the virtual memory layout map from `/proc/<pid>/maps` to identify writable memory regions (heaps, stacks, anonymous memory).
+  * Open `/proc/<pid>/mem`, seek to the mapped addresses, and scan the raw bytes for specified key patterns or plain-text credentials.
+  * Report any matches as a test assertion failure.
+
+### B. JVM Heap Dump & Analysis (`dump_app_heap`)
+* **Background**: Inspecting Java Heap objects without launching heavy Android Studio Profilers.
+* **Proposed Implementation**:
+  * Trigger an automated heap dump via `am dumpheap <pid> <path>` on the device.
+  * Pull the raw `.hprof` file to the host and convert it using `hprof-conv`.
+  * Parse the converted heap dump on the host JVM to report instances of specific classes (e.g., `SecretKeySpec`) and detect potential leaks.
+
+### C. Process Thread Stack Dump (`dump_process_threads`)
+* **Background**: Fast diagnosing of deadlocks or ANR freezes on the target device.
+* **Proposed Implementation**:
+  * Trigger a thread stack trace dump by sending a `kill -3 <pid>` signal to the target process.
+  * Retrieve and parse the generated `/data/anr/traces.txt` on the host to highlight blocked or deadlocked threads.
