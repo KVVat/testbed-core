@@ -635,201 +635,198 @@ private var serverEngine: io.ktor.server.engine.EmbeddedServer<*, *>? = null
         val mcpServer = configureServer()
         mcpServerInstance = mcpServer
 
-        serverEngine = embeddedServer(CIO, host = host, port = port) {
-            installCors()
-            install(SSE)
-            install(IgnoreTrailingSlash)
-            
-            // Session cleanup job (120 minutes expiration)
-            appViewModel.viewModelScope.launch(Dispatchers.IO) {
-                while (isActive) {
-                    kotlinx.coroutines.delay(60000) // Check every minute
-                    val now = System.currentTimeMillis()
-                    val expiredIds = serverSessions.filter { now - it.value.lastActivityTime > 120 * 60 * 1000 }.keys
-                    if (expiredIds.isNotEmpty()) {
-                        appViewModel.log("MCP", "Removing expired sessions: $expiredIds")
-                        expiredIds.forEach { serverSessions.remove(it) }
-                    }
-                }
-            }
-
-            routing {
-                val sseHandler: suspend io.ktor.server.sse.ServerSSESession.() -> Unit = {
-                    val transport = SseServerTransport("/mcp/message", this)
-                    // appViewModel.log("MCP", "New SSE connection. Sending endpoint: /mcp/message?sessionId=${transport.sessionId}")
-                    
-                    // JetSkiから再接続(リロード)された際に、古いセッションが残っていると
-                    // 後続の fallback POST がそちらを掴んでしまうバグを防ぐためクリアする
-                    // ★ マルチセッション対応のためクリアを無効化
-                    // serverSessions.clear()
-                    
-                    val serverSession = mcpServer.createSession(transport)
-                    serverSessions[transport.sessionId] = SessionHolder(transport.sessionId, serverSession)
-
-                    serverSession.onInitialized {
-                        appViewModel.log("MCP", "Server session initialized for: ${transport.sessionId}")
-                    }
-
-                    serverSession.onClose {
-                        appViewModel.log("MCP", "Server session closed for: ${transport.sessionId}")
-                        serverSessions.remove(transport.sessionId)
-                    }
-                    kotlinx.coroutines.awaitCancellation()
-                }
-
-                sse("/mcp", sseHandler)
+        try {
+            val engine = embeddedServer(CIO, host = host, port = port) {
+                installCors()
+                install(SSE)
+                install(IgnoreTrailingSlash)
                 
-                sse("/mcp/test_logs") {
-                    println("Client connected to /mcp/test_logs")
-                    val session = this
-                    val job = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                        appViewModel.logFlow.collect { logLine ->
-                            val data = Gson().toJson(mapOf(
-                                "time" to logLine.timestamp,
-                                "level" to logLine.level.name,
-                                "message" to "[${logLine.tag}] ${logLine.message}"
-                            ))
-                            session.send(io.ktor.sse.ServerSentEvent(data = data))
+                // Session cleanup job (120 minutes expiration)
+                appViewModel.viewModelScope.launch(Dispatchers.IO) {
+                    while (isActive) {
+                        kotlinx.coroutines.delay(60000) // Check every minute
+                        val now = System.currentTimeMillis()
+                        val expiredIds = serverSessions.filter { now - it.value.lastActivityTime > 120 * 60 * 1000 }.keys
+                        if (expiredIds.isNotEmpty()) {
+                            appViewModel.log("MCP", "Removing expired sessions: $expiredIds")
+                            expiredIds.forEach { serverSessions.remove(it) }
                         }
                     }
-                    try {
-                        kotlinx.coroutines.awaitCancellation()
-                    } finally {
-                        job.cancel()
-                        println("Client disconnected from /mcp/test_logs")
-                    }
                 }
-                
-                post("/mcp/message") {
-                    appViewModel.log("MCP", "Incoming POST request to /mcp/message")
-                    val sessionId: String? = call.request.queryParameters["sessionId"]
-                    if (sessionId == null) {
-                        appViewModel.log("MCP", "Error: Missing sessionId parameter")
-                        call.respond(HttpStatusCode.BadRequest, "Missing sessionId parameter")
-                        return@post
+
+                routing {
+                    val sseHandler: suspend io.ktor.server.sse.ServerSSESession.() -> Unit = {
+                        val transport = SseServerTransport("/mcp/message", this)
+                        val serverSession = mcpServer.createSession(transport)
+                        serverSessions[transport.sessionId] = SessionHolder(transport.sessionId, serverSession)
+
+                        serverSession.onInitialized {
+                            appViewModel.log("MCP", "Server session initialized for: ${transport.sessionId}")
+                        }
+
+                        serverSession.onClose {
+                            appViewModel.log("MCP", "Server session closed for: ${transport.sessionId}")
+                            serverSessions.remove(transport.sessionId)
+                        }
+                        kotlinx.coroutines.awaitCancellation()
                     }
 
-                    val sessionHolder = serverSessions[sessionId]
-                    val transport = sessionHolder?.session?.transport as? SseServerTransport
-                    if (transport == null) {
-                        appViewModel.log("MCP", "Error: Session not found for ID: '$sessionId' (Active sessions: ${serverSessions.keys})")
-                        call.respond(HttpStatusCode.NotFound, "Session not found")
-                        return@post
+                    sse("/mcp", sseHandler)
+                    
+                    sse("/mcp/test_logs") {
+                        println("Client connected to /mcp/test_logs")
+                        val session = this
+                        val job = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                            appViewModel.logFlow.collect { logLine ->
+                                val data = Gson().toJson(mapOf(
+                                    "time" to logLine.timestamp,
+                                    "level" to logLine.level.name,
+                                    "message" to "[${logLine.tag}] ${logLine.message}"
+                                ))
+                                session.send(io.ktor.sse.ServerSentEvent(data = data))
+                            }
+                        }
+                        try {
+                            kotlinx.coroutines.awaitCancellation()
+                        } finally {
+                            job.cancel()
+                            println("Client disconnected from /mcp/test_logs")
+                        }
                     }
+                    
+                    post("/mcp/message") {
+                        appViewModel.log("MCP", "Incoming POST request to /mcp/message")
+                        val sessionId: String? = call.request.queryParameters["sessionId"]
+                        if (sessionId == null) {
+                            appViewModel.log("MCP", "Error: Missing sessionId parameter")
+                            call.respond(HttpStatusCode.BadRequest, "Missing sessionId parameter")
+                            return@post
+                        }
 
-                    val body = try {
-                        call.receiveText()
-                    } catch (e: Exception) {
-                        appViewModel.log("MCP", "Error reading request body: ${e.message}")
-                        call.respondText("Invalid request body", status = HttpStatusCode.BadRequest)
-                        return@post
-                    }
-                    
-                    sessionHolder.lastActivityTime = System.currentTimeMillis()
-                    appViewModel.log("MCP", "Successfully routed POST to session $sessionId (Updated activity)")
-                    appViewModel.log("MCP", "Incoming Payload: $body")
-                    
-                    try {
-                        transport.handleMessage(body)
+                        val sessionHolder = serverSessions[sessionId]
+                        val transport = sessionHolder?.session?.transport as? SseServerTransport
+                        if (transport == null) {
+                            appViewModel.log("MCP", "Error: Session not found for ID: '$sessionId' (Active sessions: ${serverSessions.keys})")
+                            call.respond(HttpStatusCode.NotFound, "Session not found")
+                            return@post
+                        }
+
+                        val body = try {
+                            call.receiveText()
+                        } catch (e: Exception) {
+                            appViewModel.log("MCP", "Error reading request body: ${e.message}")
+                            call.respondText("Invalid request body", status = HttpStatusCode.BadRequest)
+                            return@post
+                        }
                         
-                        // JetSkiの `initialize` 要求は同期レスポンスを求めるため横取りしてモックを返す
-                        val idMatch = "\"id\"\\s*:\\s*(\\d+|\\\".*?\\\")".toRegex().find(body)
+                        sessionHolder.lastActivityTime = System.currentTimeMillis()
+                        appViewModel.log("MCP", "Successfully routed POST to session $sessionId (Updated activity)")
+                        appViewModel.log("MCP", "Incoming Payload: $body")
+                        
+                        try {
+                            transport.handleMessage(body)
+                            
+                            // JetSkiの `initialize` 要求は同期レスポンスを求めるため横取りしてモックを返す
+                            val idMatch = "\"id\"\\s*:\\s*(\\d+|\\\".*?\\\")".toRegex().find(body)
+                            val idVal = idMatch?.groupValues?.get(1) ?: "1"
+
+                            if (body.contains("\"method\":\"initialize\"") || body.contains("\"method\": \"initialize\"")) {
+                                // Kotlin SDK側内部で非同期に初期化が完了するのを待つため、少しだけ遅延させる
+                                kotlinx.coroutines.delay(200)
+                                
+                                val mockResponse = """{"jsonrpc": "2.0", "id": $idVal, "result": {"protocolVersion": "2024-11-05", "capabilities": {"prompts": {"listChanged": true}, "resources": {"subscribe": true, "listChanged": true}, "tools": {"listChanged": true}}, "serverInfo": {"name": "testbed-core", "version": "1.0.0"}}}"""
+                                call.respondText(mockResponse, io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.OK)
+                            } else {
+                                // ダミーのNotification（id無し）を返すことで、同期Promiseを消費せず、デコーダーのエラーを回避
+                                call.respondText("""{"jsonrpc": "2.0", "method": "dummy"}""", io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.Accepted)
+                            }
+                        } catch (e: Exception) {
+                            appViewModel.log("MCP", "Error handling message: ${e.message}")
+                            call.respondText("{\"error\":\"Error handling message\"}", io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.BadRequest)
+                        }
+                    }
+
+                    // Fallback catch-all for JetSki's weird POST requests
+                    post("/mcp") {
+                        if (!appViewModel.appSettings.value.useMcpFallback) {
+                            call.respondText("Fallback disabled", io.ktor.http.ContentType.Text.Plain, io.ktor.http.HttpStatusCode.NotFound)
+                            return@post
+                        }
+                        val rawBody = call.receiveText()
+                        appViewModel.log("MCP", "Incoming Fallback Payload: $rawBody")
+                        
+                        val idMatch = "\"id\"\\s*:\\s*(\\d+|\\\".*?\\\")".toRegex().find(rawBody)
                         val idVal = idMatch?.groupValues?.get(1) ?: "1"
 
-                        if (body.contains("\"method\":\"initialize\"") || body.contains("\"method\": \"initialize\"")) {
-                            // Kotlin SDK側内部で非同期に初期化が完了するのを待つため、JetSkiへのmock返却をあえて遅延させる
-                            // Kotlin SDK側内部で非同期に初期化が完了するのを待つため、少しだけ遅延させる
-                            kotlinx.coroutines.delay(200)
+                        // Handle initialize request even without active session
+                        if (rawBody.contains("\"method\":\"initialize\"") || rawBody.contains("\"method\": \"initialize\"")) {
+                            val activeSessionHolder = serverSessions.values.firstOrNull()
+                            val activeSession = activeSessionHolder?.session
+                            val transport = activeSession?.transport as? io.modelcontextprotocol.kotlin.sdk.server.SseServerTransport
                             
+                            if (transport != null) {
+                                try {
+                                    transport.handleMessage(rawBody)
+                                    activeSessionHolder.lastActivityTime = System.currentTimeMillis()
+                                } catch (e: Exception) {
+                                    appViewModel.log("MCP", "Error handling initialize message: ${e.message}")
+                                }
+                            } else {
+                                appViewModel.log("MCP", "Received initialize POST without active session. Proceeding with mock response.")
+                            }
+                            
+                            kotlinx.coroutines.delay(200)
                             val mockResponse = """{"jsonrpc": "2.0", "id": $idVal, "result": {"protocolVersion": "2024-11-05", "capabilities": {"prompts": {"listChanged": true}, "resources": {"subscribe": true, "listChanged": true}, "tools": {"listChanged": true}}, "serverInfo": {"name": "testbed-core", "version": "1.0.0"}}}"""
                             call.respondText(mockResponse, io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.OK)
-                        } else {
-                            // ダミーのNotification（id無し）を返すことで、同期Promiseを消費せず、デコーダーのエラーを回避
-                            call.respondText("""{"jsonrpc": "2.0", "method": "dummy"}""", io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.Accepted)
+                            return@post
                         }
-                    } catch (e: Exception) {
-                        appViewModel.log("MCP", "Error handling message: ${e.message}")
-                        call.respondText("{\"error\":\"Error handling message\"}", io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.BadRequest)
-                    }
-                }
 
-                // Fallback catch-all for JetSki's weird POST requests
-                post("/mcp") {
-                    if (!appViewModel.appSettings.value.useMcpFallback) {
-                        call.respondText("Fallback disabled", io.ktor.http.ContentType.Text.Plain, io.ktor.http.HttpStatusCode.NotFound)
-                        return@post
-                    }
-                    val rawBody = call.receiveText()
-                    appViewModel.log("MCP", "Incoming Fallback Payload: $rawBody")
-                    
-                    val idMatch = "\"id\"\\s*:\\s*(\\d+|\\\".*?\\\")".toRegex().find(rawBody)
-                    val idVal = idMatch?.groupValues?.get(1) ?: "1"
+                        if (rawBody.contains("\"method\":\"tools/list\"") || rawBody.contains("\"method\": \"tools/list\"")) {
+                            val mockToolsResponse = getMockToolsJson(idVal)
+                            call.respondText(mockToolsResponse, io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.OK)
+                            return@post
+                        }
 
-                    // Handle initialize request even without active session
-                    if (rawBody.contains("\"method\":\"initialize\"") || rawBody.contains("\"method\": \"initialize\"")) {
-                        val activeSessionHolder = serverSessions.values.firstOrNull()
+                        // Original logic for other messages
+                        var activeSessionHolder = serverSessions.values.maxByOrNull { it.lastActivityTime }
+                        var retries = 0
+                        // セッションがない場合のみ最大2秒待機して探す
+                        while (activeSessionHolder == null && retries < 20) {
+                            kotlinx.coroutines.delay(100)
+                            activeSessionHolder = serverSessions.values.maxByOrNull { it.lastActivityTime }
+                            retries++
+                        }
+                        
                         val activeSession = activeSessionHolder?.session
                         val transport = activeSession?.transport as? io.modelcontextprotocol.kotlin.sdk.server.SseServerTransport
+                        
+                        if (activeSessionHolder != null) {
+                            activeSessionHolder.lastActivityTime = System.currentTimeMillis()
+                            appViewModel.log("MCP", "Fallback POST using session: ${activeSessionHolder.sessionId}")
+                        }
                         
                         if (transport != null) {
                             try {
                                 transport.handleMessage(rawBody)
-                                activeSessionHolder.lastActivityTime = System.currentTimeMillis()
+                                call.respondText("""{"jsonrpc": "2.0", "method": "dummy"}""", io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.Accepted)
                             } catch (e: Exception) {
-                                appViewModel.log("MCP", "Error handling initialize message: ${e.message}")
+                                appViewModel.log("MCP", "Error handling fallback POST: ${e.message}", org.example.project.LogLevel.ERROR)
+                                call.respondText("{\"error\":\"Bad Request\"}", io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.BadRequest)
                             }
                         } else {
-                            appViewModel.log("MCP", "Received initialize POST without active session. Proceeding with mock response.")
+                            // タイムアウトした場合は、速やかに404を返してクライアントに再接続を促す
+                            appViewModel.log("MCP", "No active SSE session to route JetSki's POST to (timed out). Rejecting immediately.", org.example.project.LogLevel.WARN)
+                            call.respondText("Session not found", io.ktor.http.ContentType.Text.Plain, io.ktor.http.HttpStatusCode.NotFound)
                         }
-                        
-                        kotlinx.coroutines.delay(200)
-                        val mockResponse = """{"jsonrpc": "2.0", "id": $idVal, "result": {"protocolVersion": "2024-11-05", "capabilities": {"prompts": {"listChanged": true}, "resources": {"subscribe": true, "listChanged": true}, "tools": {"listChanged": true}}, "serverInfo": {"name": "testbed-core", "version": "1.0.0"}}}"""
-                        call.respondText(mockResponse, io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.OK)
-                        return@post
-                    }
-
-                    if (rawBody.contains("\"method\":\"tools/list\"") || rawBody.contains("\"method\": \"tools/list\"")) {
-                        val mockToolsResponse = getMockToolsJson(idVal)
-                        call.respondText(mockToolsResponse, io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.OK)
-                        return@post
-                    }
-
-                    // Original logic for other messages
-                    var activeSessionHolder = serverSessions.values.maxByOrNull { it.lastActivityTime }
-                    var retries = 0
-                    // セッションがない場合のみ最大2秒待機して探す
-                    while (activeSessionHolder == null && retries < 20) {
-                        kotlinx.coroutines.delay(100)
-                        activeSessionHolder = serverSessions.values.maxByOrNull { it.lastActivityTime }
-                        retries++
-                    }
-                    
-                    val activeSession = activeSessionHolder?.session
-                    val transport = activeSession?.transport as? io.modelcontextprotocol.kotlin.sdk.server.SseServerTransport
-                    
-                    if (activeSessionHolder != null) {
-                        activeSessionHolder.lastActivityTime = System.currentTimeMillis()
-                        appViewModel.log("MCP", "Fallback POST using session: ${activeSessionHolder.sessionId}")
-                    }
-                    
-                    if (transport != null) {
-                        try {
-                            transport.handleMessage(rawBody)
-                            call.respondText("""{"jsonrpc": "2.0", "method": "dummy"}""", io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.Accepted)
-                        } catch (e: Exception) {
-                            appViewModel.log("MCP", "Error handling fallback POST: ${e.message}", org.example.project.LogLevel.ERROR)
-                            call.respondText("{\"error\":\"Bad Request\"}", io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.BadRequest)
-                        }
-                    } else {
-                        // タイムアウトした場合は、速やかに404を返してクライアントに再接続を促す
-                        appViewModel.log("MCP", "No active SSE session to route JetSki's POST to (timed out). Rejecting immediately.", org.example.project.LogLevel.WARN)
-                        call.respondText("Session not found", io.ktor.http.ContentType.Text.Plain, io.ktor.http.HttpStatusCode.NotFound)
                     }
                 }
             }
-        }.start(wait = false)
-
-        appViewModel.log("MCP", "MCP SSE Server started on http://$host:$port/mcp", org.example.project.LogLevel.PASS)
+            serverEngine = engine.start(wait = false)
+            appViewModel.log("MCP", "MCP SSE Server started on http://$host:$port/mcp", org.example.project.LogLevel.PASS)
+        } catch (e: Exception) {
+            appViewModel.log("MCP", "Failed to start MCP SSE Server on $host:$port: ${e.message}", org.example.project.LogLevel.ERROR)
+            System.err.println("[MCP] Failed to start MCP SSE Server on $host:$port: ${e.message}")
+        }
     }
 
     fun stop() {

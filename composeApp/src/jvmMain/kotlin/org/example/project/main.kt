@@ -36,7 +36,27 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+import org.example.project.tools.SingleInstanceLock
+
 fun main() {
+    // Acquire single instance process lock
+    if (!SingleInstanceLock.acquire()) {
+        System.err.println("[BOOT] Another instance of Testbed Core is already running. Exiting...")
+        try {
+            if (!java.awt.GraphicsEnvironment.isHeadless()) {
+                javax.swing.JOptionPane.showMessageDialog(
+                    null,
+                    "Testbed Core is already running.\nOnly one instance of Testbed Core can run at a time.",
+                    "Testbed Core - Already Running",
+                    javax.swing.JOptionPane.WARNING_MESSAGE
+                )
+            }
+        } catch (_: Exception) {
+            // Ignore UI dialog errors in headless / early-boot environments
+        }
+        exitProcess(0)
+    }
+
     val isWindows = System.getProperty("os.name").lowercase().contains("win")
     
     println("[BOOT] Application starting...")
@@ -71,6 +91,7 @@ fun main() {
 
     Window(
         onCloseRequest = {
+            SingleInstanceLock.release()
             exitApplication()
             exitProcess(0)
         },
@@ -115,6 +136,7 @@ fun main() {
                                     .clip(CircleShape)
                                     .background(Color(0xFFFF5F56))
                                     .clickable {
+                                        SingleInstanceLock.release()
                                         exitApplication()
                                         exitProcess(0)
                                     }

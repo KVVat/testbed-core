@@ -20,6 +20,7 @@ class McpSseServerE2ETest {
             rootDir = rootDir.parentFile
         }
         val scriptFile = File(rootDir, "scripts/mcp_call.sh")
+        Assume.assumeTrue("scripts/mcp_call.sh not found at ${scriptFile.absolutePath}", scriptFile.exists())
         
         val command = if (argsJson.isNotEmpty()) {
             arrayOf(scriptFile.absolutePath, toolName, argsJson)
