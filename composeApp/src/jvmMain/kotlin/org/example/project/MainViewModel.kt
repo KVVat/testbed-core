@@ -54,6 +54,7 @@ data class AppSettings(
 class MainViewModel : ViewModel(), KoinComponent {
     private val adbRepository: AdbRepository by inject()
     private val testExecutor: JUnitTestExecutor by inject()
+    private val pythonTestExecutor: org.example.project.python.PythonTestExecutor by inject()
     
     private val _uiState = MutableStateFlow(AppUiState())
     val uiState = _uiState.asStateFlow()
@@ -244,7 +245,26 @@ class MainViewModel : ViewModel(), KoinComponent {
                 currentTestProgress = progress
             }
         }
-
+        viewModelScope.launch {
+            pythonTestExecutor.logs.collect { event ->
+                log(event.tag, event.message, event.level)
+            }
+        }
+        viewModelScope.launch {
+            pythonTestExecutor.isRunning.collect { isRunning ->
+                toggleIsRunning(isRunning)
+            }
+        }
+        viewModelScope.launch {
+            pythonTestExecutor.currentTestStep.collect { step ->
+                if (step.isNotBlank()) currentTestStep = step
+            }
+        }
+        viewModelScope.launch {
+            pythonTestExecutor.currentTestProgress.collect { progress ->
+                if (progress > 0) currentTestProgress = progress
+            }
+        }
 
         mcpServer.start(host = _appSettings.value.mcpServerHost)
 
@@ -563,6 +583,27 @@ class MainViewModel : ViewModel(), KoinComponent {
                     )
                 }
             }
+
+            // Scan for Python test scripts (pytest / python directories and plugins)
+            val pythonDirs = listOf(
+                File(baseDir, "resources/pytest"),
+                File(baseDir, "resources/python"),
+                File(baseDir, "plugins")
+            )
+            pythonDirs.forEach { dir ->
+                if (dir.exists()) {
+                    val pyPlugins = org.example.project.python.PythonTestScanner.scanDirectory(dir)
+                    pyPlugins.forEach { pyPlugin ->
+                        withContext(Dispatchers.Main) {
+                            if (_testPlugins.none { it.id == pyPlugin.id }) {
+                                _testPlugins.add(pyPlugin)
+                                loadedCount++
+                            }
+                        }
+                    }
+                }
+            }
+
             // ★追加: 最後にまとめて結果を出力
             if (loadedCount > 0) {
                 log("SYSTEM", "$loadedCount plugins loaded.", LogLevel.PASS)
@@ -595,11 +636,15 @@ class MainViewModel : ViewModel(), KoinComponent {
     }
 
     fun runTest(plugin: TestPlugin, methodName: String? = null, isMcp: Boolean = false) {
-        testExecutor.runTest(plugin, methodName, isMcp)
+        if (plugin.isPython) {
+            pythonTestExecutor.runTest(plugin, methodName, isMcp)
+        } else {
+            testExecutor.runTest(plugin, methodName, isMcp)
+        }
     }
 
     fun runTestForMcp(className: String, methodName: String?) {
-        val plugin = testPlugins.find { it.className == className }
+        val plugin = testPlugins.find { it.className == className || it.shortName == className || it.id == className }
         if (plugin == null) {
             log("SYSTEM", "Test plugin not found: $className", LogLevel.ERROR)
             testExecutor.mcpTestResults.add(org.example.project.mcp.McpTestResult(className, methodName ?: "Unknown", "Error", "Test plugin not found: $className", null))

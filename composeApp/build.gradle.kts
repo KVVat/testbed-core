@@ -61,6 +61,8 @@ kotlin {
             implementation(libs.ktor.server.cors)
             implementation(libs.mcp.kotlin.sdk)
             implementation(libs.sqlite)
+            implementation(libs.graal.polyglot)
+            implementation(libs.graal.python.embedding)
         }
     }
 }

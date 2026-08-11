@@ -38,10 +38,13 @@ data class TestPlugin(
     val title: String = "",       // ★ 追加: 人間が読めるタイトル
     val description: String = "", // ★ 追加: テストの説明
     val category: String = "(none)", // ★ 追加: カテゴリ
-    val methods: List<String> = emptyList() // ★ 追加: テストメソッド一覧
+    val methods: List<String> = emptyList(), // ★ 追加: テストメソッド一覧
+    val isPython: Boolean = false, // ★ 追加: Pythonテストフラグ
+    val scriptFile: java.io.File? = null // ★ 追加: Pythonスクリプトファイル
 ) {
     // ★ 追加: 実行時に初めてURLClassLoaderを回してクラスを実体化するメソッド
     fun resolveClass(): Class<*> {
+        if (isPython) throw UnsupportedOperationException("Python test plugins do not have JVM Class objects")
         if (clazz != null) return clazz // 互換性フォールバック
         val loader = java.net.URLClassLoader(arrayOf(jarFile!!.toURI().toURL()), this.javaClass.classLoader)
         return loader.loadClass(className)

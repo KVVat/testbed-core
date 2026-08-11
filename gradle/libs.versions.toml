@@ -19,6 +19,7 @@ koin = "4.0.0"
 sqlite = "3.48.0.0"
 
 jetlime = "4.3.0"
+graalpy = "25.0.2"
 
 [libraries]
 koin-core = { module = "io.insert-koin:koin-core", version.ref = "koin" }
@@ -48,6 +49,8 @@ ktor-server-cio = { module = "io.ktor:ktor-server-cio", version.ref = "ktor" }
 ktor-server-cors = { module = "io.ktor:ktor-server-cors", version.ref = "ktor" }
 mcp-kotlin-sdk = { module = "io.modelcontextprotocol:kotlin-sdk", version.ref = "mcp" }
 jetlime = { module = "io.github.pushpalroy:jetlime", version.ref = "jetlime" }
+graal-polyglot = { module = "org.graalvm.polyglot:polyglot", version.ref = "graalpy" }
+graal-python-embedding = { module = "org.graalvm.python:python-embedding", version.ref = "graalpy" }
 
 [plugins]
 composeHotReload = { id = "org.jetbrains.compose.hot-reload", version.ref = "composeHotReload" }

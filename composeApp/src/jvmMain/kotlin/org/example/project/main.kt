@@ -66,6 +66,7 @@ fun main() {
             single { AdbRepository() }
             single { ToolViewModel() }
             single { JUnitTestExecutor(File(JUnitBridge.baseDir.ifBlank { "." })) }
+            single { org.example.project.python.PythonTestExecutor(File(JUnitBridge.baseDir.ifBlank { "." }), get()) }
         })
     }
     println("[BOOT] os.name=${System.getProperty("os.name")}")

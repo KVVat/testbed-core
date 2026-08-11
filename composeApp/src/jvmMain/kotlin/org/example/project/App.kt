@@ -341,12 +341,29 @@ fun TestListDrawerContent(
                                 ) {
                                     // 左側: テキスト情報
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = plugin.title.ifBlank { plugin.shortName },
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color.White,
-                                            fontSize = 14.sp
-                                        )
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            if (plugin.isPython) {
+                                                Surface(
+                                                    color = Color(0xFF3572A5),
+                                                    shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
+                                                    modifier = Modifier.padding(end = 6.dp)
+                                                ) {
+                                                    Text(
+                                                        text = "PY",
+                                                        color = Color.White,
+                                                        fontSize = 10.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                                    )
+                                                }
+                                            }
+                                            Text(
+                                                text = plugin.title.ifBlank { plugin.shortName },
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color.White,
+                                                fontSize = 14.sp
+                                            )
+                                        }
                                         Spacer(Modifier.height(4.dp))
                                         
                                         // 開閉状態に応じて文言を切り替え
@@ -370,7 +387,7 @@ fun TestListDrawerContent(
                                         if (isItemExpanded) {
                                             Spacer(Modifier.height(4.dp))
                                             Text(
-                                                text = "Class: ${plugin.className}",
+                                                text = if (plugin.isPython) "Script: ${plugin.scriptFile?.name ?: plugin.shortName}" else "Class: ${plugin.className}",
                                                 color = Color.Gray,
                                                 fontSize = 10.sp
                                             )
