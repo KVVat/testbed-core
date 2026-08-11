@@ -23,6 +23,7 @@ import org.w3c.dom.Document
 import org.w3c.dom.Element
 import java.io.BufferedWriter
 import java.io.File
+import java.util.concurrent.TimeUnit
 import java.io.FileOutputStream
 import java.io.OutputStreamWriter
 import java.io.Writer
@@ -171,12 +172,55 @@ class PythonTestExecutor(
             var buildDisplayId = ""
             var deviceSerial = adbRepository?.adbState?.value?.deviceSerial ?: (System.getProperty("DEVICE_SERIAL") ?: "")
 
-            if (deviceSerial.isNotBlank() && adbRepository != null) {
+            if (deviceSerial.isBlank()) {
                 try {
-                    deviceModel = adbRepository.executeAdbShell("getprop ro.product.model").trim()
-                    osVersion = adbRepository.executeAdbShell("getprop ro.build.version.release").trim()
-                    buildDisplayId = adbRepository.executeAdbShell("getprop ro.build.display.id").trim()
+                    val p = ProcessBuilder("adb", "devices").start()
+                    val lines = p.inputStream.bufferedReader().readLines()
+                    val devLine = lines.drop(1).firstOrNull { it.contains("\tdevice") }
+                    if (devLine != null) {
+                        deviceSerial = devLine.split("\t")[0].trim()
+                    }
                 } catch (_: Exception) {}
+            }
+            if (deviceSerial.isBlank()) {
+                try {
+                    val p = ProcessBuilder("adb", "get-serialno").start()
+                    val out = p.inputStream.bufferedReader().readText().trim()
+                    if (out.isNotBlank() && out != "unknown" && !out.startsWith("error")) {
+                        deviceSerial = out
+                    }
+                } catch (_: Exception) {}
+            }
+
+            if (deviceSerial.isNotBlank()) {
+                if (adbRepository != null && adbRepository.adbState.value.isValid) {
+                    try {
+                        deviceModel = adbRepository.executeAdbShell("getprop ro.product.model").trim()
+                        osVersion = adbRepository.executeAdbShell("getprop ro.build.version.release").trim()
+                        buildDisplayId = adbRepository.executeAdbShell("getprop ro.build.display.id").trim()
+                    } catch (_: Exception) {}
+                }
+                if (deviceModel.isBlank()) {
+                    try {
+                        val p = ProcessBuilder("adb", "-s", deviceSerial, "shell", "getprop", "ro.product.model").start()
+                        val out = p.inputStream.bufferedReader().readText().trim()
+                        if (out.isNotBlank() && !out.contains("error", ignoreCase = true)) deviceModel = out
+                    } catch (_: Exception) {}
+                }
+                if (osVersion.isBlank()) {
+                    try {
+                        val p = ProcessBuilder("adb", "-s", deviceSerial, "shell", "getprop", "ro.build.version.release").start()
+                        val out = p.inputStream.bufferedReader().readText().trim()
+                        if (out.isNotBlank() && !out.contains("error", ignoreCase = true)) osVersion = out
+                    } catch (_: Exception) {}
+                }
+                if (buildDisplayId.isBlank()) {
+                    try {
+                        val p = ProcessBuilder("adb", "-s", deviceSerial, "shell", "getprop", "ro.build.display.id").start()
+                        val out = p.inputStream.bufferedReader().readText().trim()
+                        if (out.isNotBlank() && !out.contains("error", ignoreCase = true)) buildDisplayId = out
+                    } catch (_: Exception) {}
+                }
             }
 
             val testTargetName = "${plugin.name}${if (methodName != null) "#$methodName" else ""}"
@@ -216,6 +260,221 @@ class PythonTestExecutor(
 
                     fun getOsVersion(): String {
                         return osVersion
+                    }
+
+                    fun isDeviceConnected(): Boolean {
+                        return deviceSerial.isNotBlank()
+                    }
+
+                    fun executeShell(command: String): String {
+                        if (deviceSerial.isBlank()) return "Error: No target device connected."
+                        return try {
+                            val p = ProcessBuilder("adb", "-s", deviceSerial, "shell", command).redirectErrorStream(true).start()
+                            val finished = p.waitFor(20, java.util.concurrent.TimeUnit.SECONDS)
+                            if (!finished) {
+                                p.destroyForcibly()
+                                "Error: ADB shell command timed out: $command"
+                            } else {
+                                p.inputStream.bufferedReader().readText().trim()
+                            }
+                        } catch (e: Exception) {
+                            "Error: ${e.message}"
+                        }
+                    }
+
+                    fun getProp(propName: String): String {
+                        return executeShell("getprop $propName").trim()
+                    }
+
+                    fun clearLogcat(): String {
+                        log("ADB", "Clearing logcat buffer...", LogLevel.INFO)
+                        return executeShell("logcat -c")
+                    }
+
+                    fun getLogcat(): String = getLogcat("", 100)
+                    fun getLogcat(tag: String): String = getLogcat(tag, 100)
+                    fun getLogcat(tag: String, maxLines: Int): String {
+                        val tagFilter = if (tag.isNotBlank()) "-s $tag" else ""
+                        return executeShell("logcat -d $tagFilter -t $maxLines")
+                    }
+
+                    fun waitForLogcat(tag: String, pattern: String): String? = waitForLogcat(tag, pattern, 30)
+                    fun waitForLogcat(tag: String, pattern: String, timeoutSec: Int): String? {
+                        log("ADB", "Waiting for logcat [tag=$tag, pattern='$pattern'] (timeout: ${timeoutSec}s)...", LogLevel.INFO)
+                        val startTime = System.currentTimeMillis()
+                        val timeoutMs = timeoutSec * 1000L
+                        val regex = try { Regex(pattern, RegexOption.IGNORE_CASE) } catch (_: Exception) { Regex.fromLiteral(pattern) }
+                        val tagFilter = if (tag.isNotBlank()) "-s $tag" else ""
+
+                        while (System.currentTimeMillis() - startTime < timeoutMs) {
+                            val logs = executeShell("logcat -d $tagFilter -t 200")
+                            for (line in logs.lines()) {
+                                if (regex.containsMatchIn(line)) {
+                                    log("ADB", "Found matching logcat line: $line", LogLevel.PASS)
+                                    return line
+                                }
+                            }
+                            Thread.sleep(1000)
+                        }
+                        log("ADB", "Timed out waiting for logcat [tag=$tag, pattern='$pattern']", LogLevel.WARN)
+                        return null
+                    }
+
+                    fun reboot(): String = reboot("")
+                    fun reboot(mode: String): String {
+                        log("ADB", "Rebooting device (mode: '$mode')...", LogLevel.INFO)
+                        return try {
+                            val cmd = mutableListOf("adb")
+                            if (deviceSerial.isNotBlank()) cmd.addAll(listOf("-s", deviceSerial))
+                            cmd.add("reboot")
+                            if (mode.isNotBlank()) cmd.add(mode)
+                            val p = ProcessBuilder(cmd).redirectErrorStream(true).start()
+                            p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+                            "Reboot signal sent"
+                        } catch (e: Exception) {
+                            "Error sending reboot: ${e.message}"
+                        }
+                    }
+
+                    fun waitBoot(): Boolean = waitBoot(180000L)
+                    fun waitBoot(timeoutMs: Long): Boolean {
+                        log("ADB", "Waiting for device $deviceSerial to boot up (timeout: ${timeoutMs / 1000}s)...", LogLevel.INFO)
+                        val startTime = System.currentTimeMillis()
+                        Thread.sleep(5000)
+                        while (System.currentTimeMillis() - startTime < timeoutMs) {
+                            try {
+                                val bootCompleted = executeShell("getprop sys.boot_completed").trim()
+                                if (bootCompleted == "1") {
+                                    val pmCheck = executeShell("pm path android").trim()
+                                    if (pmCheck.contains("package:")) {
+                                        log("ADB", "Device boot completed and package manager is responsive!", LogLevel.PASS)
+                                        return true
+                                    }
+                                }
+                            } catch (_: Exception) {
+                            }
+                            Thread.sleep(2000)
+                        }
+                        log("ADB", "Timed out waiting for device boot after ${timeoutMs / 1000}s", LogLevel.ERROR)
+                        return false
+                    }
+
+                    fun installApk(apkPathOrName: String): String = installApk(apkPathOrName, "-r")
+
+                    fun installApk(apkPathOrName: String, extraArgs: String = "-r"): String {
+                        val candidates = listOf(
+                            File(apkPathOrName),
+                            File(JUnitBridge.resourceDir, apkPathOrName),
+                            File(baseDir, "composeApp/resources/$apkPathOrName"),
+                            File(baseDir, "resources/$apkPathOrName"),
+                            File("composeApp/resources/$apkPathOrName"),
+                            File("resources/$apkPathOrName"),
+                            File(System.getProperty("user.dir") ?: ".", "composeApp/resources/$apkPathOrName"),
+                            File(System.getProperty("user.dir") ?: ".", "resources/$apkPathOrName")
+                        )
+
+                        val apkFile = candidates.firstOrNull { it.exists() && it.isFile }
+
+                        if (apkFile == null) {
+                            val err = "Error: APK file not found: $apkPathOrName"
+                            log("ADB", err, LogLevel.ERROR)
+                            return err
+                        }
+
+                        log("ADB", "Installing APK: ${apkFile.name} (args: $extraArgs)...", LogLevel.INFO)
+                        return try {
+                            val cmd = mutableListOf("adb")
+                            if (deviceSerial.isNotBlank()) {
+                                cmd.addAll(listOf("-s", deviceSerial))
+                            }
+                            cmd.add("install")
+                            if (extraArgs.isNotBlank()) {
+                                cmd.addAll(extraArgs.split(" ").filter { it.isNotBlank() })
+                            }
+                            cmd.add(apkFile.absolutePath)
+                            val p = ProcessBuilder(cmd).redirectErrorStream(true).start()
+                            val out = p.inputStream.bufferedReader().readText().trim()
+                            p.waitFor()
+                            if (out.contains("Success", ignoreCase = true)) {
+                                log("ADB", "APK install success: ${apkFile.name}", LogLevel.PASS)
+                            } else {
+                                log("ADB", "APK install output: $out", LogLevel.WARN)
+                            }
+                            out
+                        } catch (e: Exception) {
+                            val err = "Error installing APK: ${e.message}"
+                            log("ADB", err, LogLevel.ERROR)
+                            err
+                        }
+                    }
+
+                    fun uninstallApp(packageName: String): String {
+                        log("ADB", "Uninstalling package: $packageName...", LogLevel.INFO)
+                        return try {
+                            val cmd = mutableListOf("adb")
+                            if (deviceSerial.isNotBlank()) {
+                                cmd.addAll(listOf("-s", deviceSerial))
+                            }
+                            cmd.addAll(listOf("uninstall", packageName))
+                            val p = ProcessBuilder(cmd).redirectErrorStream(true).start()
+                            val out = p.inputStream.bufferedReader().readText().trim()
+                            p.waitFor()
+                            if (out.contains("Success", ignoreCase = true)) {
+                                log("ADB", "Package uninstalled: $packageName", LogLevel.PASS)
+                            } else {
+                                log("ADB", "Package uninstall output: $out", LogLevel.INFO)
+                            }
+                            out
+                        } catch (e: Exception) {
+                            val err = "Error uninstalling package: ${e.message}"
+                            log("ADB", err, LogLevel.ERROR)
+                            err
+                        }
+                    }
+
+                    fun isAppInstalled(packageName: String): Boolean {
+                        val out = executeShell("pm path $packageName")
+                        return out.contains("package:")
+                    }
+
+                    fun unlockDevice(): Boolean = unlockDevice("0000")
+
+                    fun unlockDevice(pin: String = "0000"): Boolean {
+                        log("ADB", "Unlocking device screen (PIN: $pin)...", LogLevel.INFO)
+                        return try {
+                            val serial = deviceSerial
+                            val prefix = if (serial.isNotBlank()) arrayOf("adb", "-s", serial) else arrayOf("adb")
+
+                            // 1. Wake up screen
+                            ProcessBuilder(*prefix, "shell", "input", "keyevent", "KEYCODE_WAKEUP").start().waitFor(3, TimeUnit.SECONDS)
+                            Thread.sleep(300)
+
+                            // 2. Dismiss keyguard
+                            ProcessBuilder(*prefix, "shell", "wm", "dismiss-keyguard").start().waitFor(3, TimeUnit.SECONDS)
+                            Thread.sleep(300)
+
+                            // 3. Unlock with locksettings or input text PIN
+                            if (pin.isNotBlank()) {
+                                ProcessBuilder(*prefix, "shell", "locksettings", "verify", "--old", pin).start().waitFor(3, TimeUnit.SECONDS)
+                                ProcessBuilder(*prefix, "shell", "input", "text", pin).start().waitFor(3, TimeUnit.SECONDS)
+                                ProcessBuilder(*prefix, "shell", "input", "keyevent", "KEYCODE_ENTER").start().waitFor(3, TimeUnit.SECONDS)
+                            }
+                            Thread.sleep(500)
+
+                            val p = ProcessBuilder(*prefix, "shell", "dumpsys", "user").start()
+                            p.waitFor(5, TimeUnit.SECONDS)
+                            val out = p.inputStream.bufferedReader().readText()
+                            val unlocked = out.contains("RUNNING_UNLOCKED")
+                            if (unlocked) {
+                                log("ADB", "Device successfully unlocked into AFU state", LogLevel.PASS)
+                            } else {
+                                log("ADB", "Device unlock attempted: $out", LogLevel.INFO)
+                            }
+                            unlocked
+                        } catch (e: Exception) {
+                            log("ADB", "Device unlock error: ${e.message}", LogLevel.WARN)
+                            false
+                        }
                     }
 
                     fun submitReport(summaryJson: String) {

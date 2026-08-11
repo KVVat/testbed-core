@@ -52,7 +52,7 @@ object PythonTestScanner {
 
             var category = SFR_CATEGORY_REGEX.find(content)?.groupValues?.get(1)?.trim()
                 ?: COMMENT_CATEGORY_REGEX.find(content)?.groupValues?.get(1)?.trim()
-                ?: "Python (Embedded)"
+                ?: "Python Test"
 
             val parentDirName = file.parentFile?.name ?: "pytest"
 

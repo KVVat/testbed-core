@@ -6,7 +6,26 @@ import java.io.ByteArrayOutputStream
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
+import org.junit.FixMethodOrder
+import org.junit.runners.MethodSorters
+
+@FixMethodOrder(MethodSorters.NAME_ASCENDING)
 class GraalPyTest {
+
+    private fun ensureDeviceReady() {
+        var count = 0
+        while (count < 45) {
+            try {
+                val p = ProcessBuilder("adb", "shell", "getprop", "sys.boot_completed").start()
+                if (p.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) {
+                    val out = p.inputStream.bufferedReader().readText().trim()
+                    if (out == "1") return
+                }
+            } catch (_: Exception) {}
+            Thread.sleep(1000)
+            count++
+        }
+    }
 
     @Test
     fun testBasicPythonExecutionAndOutputCapture() {
@@ -173,7 +192,7 @@ class GraalPyTest {
 
         val plugin = org.example.project.python.PythonTestScanner.parseTestPlugin(resolvedFile)
         kotlin.test.assertNotNull(plugin)
-        assertEquals("FCS_COP.1/Cryptographic Operation", plugin.category)
+        assertEquals("Python Test", plugin.category)
         assertEquals("Sample Cryptographic & Hash Test", plugin.title)
         assertTrue(plugin.isPython)
         assertTrue(plugin.methods.contains("test_sha256_digest"))
@@ -272,8 +291,263 @@ class GraalPyTest {
             assertTrue(xmlContent.contains("test_sha256_digest"))
             assertTrue(xmlContent.contains("test_sha512_digest"))
             assertTrue(xmlContent.contains("test_key_length_validation"))
-            assertTrue(xmlContent.contains("FCS_COP.1/Cryptographic Operation"))
+            assertTrue(xmlContent.contains("Python Test"))
             assertEquals(3, executor.mcpTestResults.size)
+        } finally {
+            tempBaseDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testConnectedDeviceMdfppVerification() {
+        ensureDeviceReady()
+        val tempBaseDir = java.nio.file.Files.createTempDirectory("testbed_dev_sec").toFile()
+        try {
+            val testFile = java.io.File("resources/pytest/test_device_mdfpp_verification.py")
+            val resolvedFile = if (testFile.exists()) testFile else java.io.File("composeApp/resources/pytest/test_device_mdfpp_verification.py")
+            assertTrue(resolvedFile.exists())
+
+            val plugin = org.example.project.python.PythonTestScanner.parseTestPlugin(resolvedFile)
+            kotlin.test.assertNotNull(plugin)
+            assertEquals(6, plugin.methods.size)
+            assertEquals("Python Test", plugin.category)
+
+            val executor = org.example.project.python.PythonTestExecutor(tempBaseDir)
+            executor.runTest(plugin, isMcp = true)
+
+            var count = 0
+            while (executor.isRunning.value && count < 200) {
+                Thread.sleep(100)
+                count++
+            }
+            Thread.sleep(200)
+
+            val resultsDir = java.io.File(tempBaseDir, "results")
+            val xmlFiles = resultsDir.listFiles { _, name -> name.startsWith("junit-report-") && name.endsWith(".xml") } ?: emptyArray()
+            assertTrue(xmlFiles.isNotEmpty())
+
+            val xmlContent = xmlFiles[0].readText()
+            println("Connected Device MDFPP Verification XML Report:\n$xmlContent")
+            assertTrue(xmlContent.contains("tests=\"6\""))
+            assertTrue(xmlContent.contains("failures=\"0\""))
+            assertTrue(xmlContent.contains("test_01_device_connection_and_boot"))
+            assertTrue(xmlContent.contains("test_02_os_integrity_and_security_patch"))
+            assertTrue(xmlContent.contains("test_03_file_based_encryption_state"))
+            assertTrue(xmlContent.contains("test_04_selinux_enforcement_status"))
+            assertTrue(xmlContent.contains("test_05_system_clock_synchronization"))
+            assertTrue(xmlContent.contains("test_06_platform_framework_package_manager"))
+            assertEquals(6, executor.mcpTestResults.size)
+        } finally {
+            tempBaseDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testAppUpdateSignatureVerification() {
+        ensureDeviceReady()
+        val tempBaseDir = java.nio.file.Files.createTempDirectory("testbed_app_update").toFile()
+        try {
+            val testFile = java.io.File("resources/pytest/test_app_update_signature_mdfpp.py")
+            val resolvedFile = if (testFile.exists()) testFile else java.io.File("composeApp/resources/pytest/test_app_update_signature_mdfpp.py")
+            assertTrue(resolvedFile.exists())
+
+            val plugin = org.example.project.python.PythonTestScanner.parseTestPlugin(resolvedFile)
+            kotlin.test.assertNotNull(plugin)
+            assertEquals(5, plugin.methods.size)
+            assertEquals("Python Test", plugin.category)
+
+            val executor = org.example.project.python.PythonTestExecutor(tempBaseDir)
+            executor.runTest(plugin, isMcp = true)
+
+            var count = 0
+            while (executor.isRunning.value && count < 600) {
+                Thread.sleep(100)
+                count++
+            }
+            Thread.sleep(300)
+
+            val resultsDir = java.io.File(tempBaseDir, "results")
+            val xmlFiles = resultsDir.listFiles { _, name -> name.startsWith("junit-report-") && name.endsWith(".xml") } ?: emptyArray()
+            assertTrue(xmlFiles.isNotEmpty(), "XML report file should be generated in results folder")
+
+            val xmlContent = xmlFiles[0].readText()
+            println("App Update Signature Verification XML Report:\n$xmlContent")
+            assertTrue(xmlContent.contains("tests=\"5\""))
+            assertTrue(xmlContent.contains("failures=\"0\""))
+            assertTrue(xmlContent.contains("test_01_install_initial_version_v1"))
+            assertTrue(xmlContent.contains("test_02_reject_mismatched_signature_update"))
+            assertTrue(xmlContent.contains("test_03_reject_unsigned_update"))
+            assertTrue(xmlContent.contains("test_04_accept_valid_signature_update_v2"))
+            assertTrue(xmlContent.contains("test_05_cleanup_installed_test_package"))
+            assertEquals(5, executor.mcpTestResults.size)
+        } finally {
+            tempBaseDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testFdpDarDirectBootEncryption() {
+        ensureDeviceReady()
+        val tempBaseDir = java.nio.file.Files.createTempDirectory("testbed_directboot").toFile()
+        try {
+            val testFile = java.io.File("resources/pytest/test_fdp_dar_direct_boot_encryption.py")
+            val resolvedFile = if (testFile.exists()) testFile else java.io.File("composeApp/resources/pytest/test_fdp_dar_direct_boot_encryption.py")
+            assertTrue(resolvedFile.exists())
+
+            val plugin = org.example.project.python.PythonTestScanner.parseTestPlugin(resolvedFile)
+            kotlin.test.assertNotNull(plugin)
+            assertEquals(5, plugin.methods.size)
+            assertEquals("Python Test", plugin.category)
+
+            val executor = org.example.project.python.PythonTestExecutor(tempBaseDir)
+            executor.runTest(plugin, isMcp = true)
+
+            var count = 0
+            while (executor.isRunning.value && count < 2000) { // allow up to 200s for reboot & boot complete
+                Thread.sleep(100)
+                count++
+            }
+            Thread.sleep(300)
+
+            val resultsDir = java.io.File(tempBaseDir, "results")
+            val xmlFiles = resultsDir.listFiles { _, name -> name.startsWith("junit-report-") && name.endsWith(".xml") } ?: emptyArray()
+            assertTrue(xmlFiles.isNotEmpty(), "XML report file should be generated in results folder")
+
+            val xmlContent = xmlFiles[0].readText()
+            println("FDP_DAR Direct Boot Encryption XML Report:\n$xmlContent")
+            assertTrue(xmlContent.contains("tests=\"5\""))
+            assertTrue(xmlContent.contains("failures=\"0\""))
+            assertTrue(xmlContent.contains("test_01_install_directboot_test_agent"))
+            assertTrue(xmlContent.contains("test_02_initialize_storage_and_launch"))
+            assertTrue(xmlContent.contains("test_03_reboot_device_into_bfu_state"))
+            assertTrue(xmlContent.contains("test_04_verify_directboot_bfu_storage_isolation"))
+            assertTrue(xmlContent.contains("test_05_cleanup_test_package"))
+            assertEquals(5, executor.mcpTestResults.size)
+        } finally {
+            tempBaseDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testFdpAcfSandboxIsolation() {
+        ensureDeviceReady()
+        val tempBaseDir = java.nio.file.Files.createTempDirectory("testbed_sandbox").toFile()
+        try {
+            val testFile = java.io.File("resources/pytest/test_fdp_acf_sandbox_isolation.py")
+            val resolvedFile = if (testFile.exists()) testFile else java.io.File("composeApp/resources/pytest/test_fdp_acf_sandbox_isolation.py")
+            assertTrue(resolvedFile.exists())
+
+            val plugin = org.example.project.python.PythonTestScanner.parseTestPlugin(resolvedFile)
+            kotlin.test.assertNotNull(plugin)
+            assertEquals(4, plugin.methods.size)
+            assertEquals("Python Test", plugin.category)
+
+            val executor = org.example.project.python.PythonTestExecutor(tempBaseDir)
+            executor.runTest(plugin, isMcp = true)
+
+            var count = 0
+            while (executor.isRunning.value && count < 600) {
+                Thread.sleep(100)
+                count++
+            }
+            Thread.sleep(300)
+
+            val resultsDir = java.io.File(tempBaseDir, "results")
+            val xmlFiles = resultsDir.listFiles { _, name -> name.startsWith("junit-report-") && name.endsWith(".xml") } ?: emptyArray()
+            assertTrue(xmlFiles.isNotEmpty(), "XML report file should be generated in results folder")
+
+            val xmlContent = xmlFiles[0].readText()
+            println("FDP_ACF Sandbox Isolation XML Report:\n$xmlContent")
+            assertTrue(xmlContent.contains("tests=\"4\""))
+            assertTrue(xmlContent.contains("failures=\"0\""))
+            assertTrue(xmlContent.contains("test_01_install_target_and_prepare_data"))
+            assertTrue(xmlContent.contains("test_02_verify_uninstall_data_destruction"))
+            assertTrue(xmlContent.contains("test_03_verify_attacker_sandbox_isolation"))
+            assertTrue(xmlContent.contains("test_04_cleanup_sandbox_test_packages"))
+            assertEquals(4, executor.mcpTestResults.size)
+        } finally {
+            tempBaseDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testFdpDarAsymmetricEncryptionLocked() {
+        ensureDeviceReady()
+        val tempBaseDir = java.nio.file.Files.createTempDirectory("testbed_asym_enc").toFile()
+        try {
+            val testFile = java.io.File("resources/pytest/test_fdp_dar_asymmetric_encryption_locked.py")
+            val resolvedFile = if (testFile.exists()) testFile else java.io.File("composeApp/resources/pytest/test_fdp_dar_asymmetric_encryption_locked.py")
+            assertTrue(resolvedFile.exists())
+
+            val plugin = org.example.project.python.PythonTestScanner.parseTestPlugin(resolvedFile)
+            kotlin.test.assertNotNull(plugin)
+            assertEquals(5, plugin.methods.size)
+            assertEquals("Python Test", plugin.category)
+
+            val executor = org.example.project.python.PythonTestExecutor(tempBaseDir)
+            executor.runTest(plugin, isMcp = true)
+
+            var count = 0
+            while (executor.isRunning.value && count < 600) {
+                Thread.sleep(100)
+                count++
+            }
+            Thread.sleep(300)
+
+            val resultsDir = java.io.File(tempBaseDir, "results")
+            val xmlFiles = resultsDir.listFiles { _, name -> name.startsWith("junit-report-") && name.endsWith(".xml") } ?: emptyArray()
+            assertTrue(xmlFiles.isNotEmpty(), "XML report file should be generated in results folder")
+
+            val xmlContent = xmlFiles[0].readText()
+            println("FDP_DAR Asymmetric Encryption Locked XML Report:\n$xmlContent")
+            assertTrue(xmlContent.contains("tests=\"5\""))
+            assertTrue(xmlContent.contains("failures=\"0\""))
+            assertTrue(xmlContent.contains("test_01_install_encryption_agent"))
+            assertTrue(xmlContent.contains("test_02_asymmetric_encryption_while_locked"))
+            assertTrue(xmlContent.contains("test_03_udr_private_key_blocked_while_locked"))
+            assertTrue(xmlContent.contains("test_04_udr_private_key_release_after_pin_unlock"))
+            assertTrue(xmlContent.contains("test_05_cleanup_encryption_package"))
+            assertEquals(5, executor.mcpTestResults.size)
+        } finally {
+            tempBaseDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testSampleIdiomaticMdfpp() {
+        ensureDeviceReady()
+        val tempBaseDir = java.nio.file.Files.createTempDirectory("testbed_idiomatic").toFile()
+        try {
+            val testFile = java.io.File("resources/pytest/test_sample_idiomatic_mdfpp.py")
+            val resolvedFile = if (testFile.exists()) testFile else java.io.File("composeApp/resources/pytest/test_sample_idiomatic_mdfpp.py")
+            assertTrue(resolvedFile.exists())
+
+            val plugin = org.example.project.python.PythonTestScanner.parseTestPlugin(resolvedFile)
+            kotlin.test.assertNotNull(plugin)
+            assertEquals(2, plugin.methods.size)
+            assertEquals("Python Test", plugin.category)
+
+            val executor = org.example.project.python.PythonTestExecutor(tempBaseDir)
+            executor.runTest(plugin, isMcp = true)
+
+            var count = 0
+            while (executor.isRunning.value && count < 200) {
+                Thread.sleep(100)
+                count++
+            }
+            Thread.sleep(300)
+
+            val resultsDir = java.io.File(tempBaseDir, "results")
+            val xmlFiles = resultsDir.listFiles { _, name -> name.startsWith("junit-report-") && name.endsWith(".xml") } ?: emptyArray()
+            assertTrue(xmlFiles.isNotEmpty(), "XML report file should be generated in results folder")
+
+            val xmlContent = xmlFiles[0].readText()
+            println("Idiomatic MDFPP Sample XML Report:\n$xmlContent")
+            assertTrue(xmlContent.contains("tests=\"2\""))
+            assertTrue(xmlContent.contains("failures=\"0\""))
+            assertTrue(xmlContent.contains("test_01_verify_device_security_props"))
+            assertTrue(xmlContent.contains("test_02_selinux_and_user_unlock_state"))
+            assertEquals(2, executor.mcpTestResults.size)
         } finally {
             tempBaseDir.deleteRecursively()
         }
