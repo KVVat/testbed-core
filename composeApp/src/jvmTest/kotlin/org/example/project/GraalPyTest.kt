@@ -481,14 +481,14 @@ class GraalPyTest {
 
             val plugin = org.example.project.python.PythonTestScanner.parseTestPlugin(resolvedFile)
             kotlin.test.assertNotNull(plugin)
-            assertEquals(5, plugin.methods.size)
+            assertEquals(7, plugin.methods.size)
             assertEquals("Python Test", plugin.category)
 
             val executor = org.example.project.python.PythonTestExecutor(tempBaseDir)
             executor.runTest(plugin, isMcp = true)
 
             var count = 0
-            while (executor.isRunning.value && count < 600) {
+            while (executor.isRunning.value && count < 1500) {
                 Thread.sleep(100)
                 count++
             }
@@ -500,14 +500,16 @@ class GraalPyTest {
 
             val xmlContent = xmlFiles[0].readText()
             println("FDP_DAR Asymmetric Encryption Locked XML Report:\n$xmlContent")
-            assertTrue(xmlContent.contains("tests=\"5\""))
+            assertTrue(xmlContent.contains("tests=\"7\""))
             assertTrue(xmlContent.contains("failures=\"0\""))
             assertTrue(xmlContent.contains("test_01_install_encryption_agent"))
-            assertTrue(xmlContent.contains("test_02_asymmetric_encryption_while_locked"))
-            assertTrue(xmlContent.contains("test_03_udr_private_key_blocked_while_locked"))
-            assertTrue(xmlContent.contains("test_04_udr_private_key_release_after_pin_unlock"))
-            assertTrue(xmlContent.contains("test_05_cleanup_encryption_package"))
-            assertEquals(5, executor.mcpTestResults.size)
+            assertTrue(xmlContent.contains("test_02_asymmetric_encryption_while_screen_locked"))
+            assertTrue(xmlContent.contains("test_03_udr_private_key_blocked_while_screen_locked"))
+            assertTrue(xmlContent.contains("test_04_reboot_device_into_bfu_state"))
+            assertTrue(xmlContent.contains("test_05_verify_private_key_blocked_in_bfu_state"))
+            assertTrue(xmlContent.contains("test_06_unlock_from_bfu_and_verify_key_release"))
+            assertTrue(xmlContent.contains("test_07_cleanup_encryption_package"))
+            assertEquals(7, executor.mcpTestResults.size)
         } finally {
             tempBaseDir.deleteRecursively()
         }
