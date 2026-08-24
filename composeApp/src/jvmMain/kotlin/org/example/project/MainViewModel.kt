@@ -5,11 +5,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.example.project.adb.AdbObserver
+import org.example.project.adb.ConflictingAdbProcess
 import org.example.project.adb.FastbootClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -58,6 +60,13 @@ class MainViewModel : ViewModel(), KoinComponent {
     
     private val _uiState = MutableStateFlow(AppUiState())
     val uiState = _uiState.asStateFlow()
+
+    val conflictingProcesses: StateFlow<List<org.example.project.adb.ConflictingAdbProcess>> = adbRepository.conflictingProcesses
+
+    private val _showAdbConflictDialog = MutableStateFlow(false)
+    val showAdbConflictDialog = _showAdbConflictDialog.asStateFlow()
+
+    private var dismissedConflictPids = setOf<Long>()
 
     private val _logFlow = MutableSharedFlow<LogLine>(replay = 100)
     val logFlow = _logFlow.asSharedFlow()
@@ -218,6 +227,17 @@ class MainViewModel : ViewModel(), KoinComponent {
         viewModelScope.launch {
             adbRepository.adbState.collect { state ->
                 updateAdbState(state.isValid, state.isUnauthorized, state.deviceSerial, state.deviceInfo)
+            }
+        }
+        viewModelScope.launch {
+            adbRepository.conflictingProcesses.collect { conflicts ->
+                val currentPids = conflicts.map { it.pid }.toSet()
+                if (conflicts.isNotEmpty() && !dismissedConflictPids.containsAll(currentPids)) {
+                    _showAdbConflictDialog.value = true
+                } else if (conflicts.isEmpty()) {
+                    _showAdbConflictDialog.value = false
+                    dismissedConflictPids = emptySet()
+                }
             }
         }
         viewModelScope.launch {
@@ -731,6 +751,27 @@ class MainViewModel : ViewModel(), KoinComponent {
         }
     }
 
+    fun openAdbConflictDialog() {
+        _showAdbConflictDialog.value = true
+    }
 
+    fun dismissAdbConflictDialog() {
+        val currentPids = adbRepository.conflictingProcesses.value.map { it.pid }.toSet()
+        dismissedConflictPids = currentPids
+        _showAdbConflictDialog.value = false
+    }
+
+    fun resolveAdbConflicts() {
+        viewModelScope.launch {
+            _showAdbConflictDialog.value = false
+            dismissedConflictPids = emptySet()
+            val success = adbRepository.cleanupAdbConflicts()
+            if (success) {
+                _snackbarMessage.emit("Conflicting ADB processes terminated. ADB server restarted.")
+            } else {
+                _snackbarMessage.emit("Failed to restart ADB server. Please check permissions.")
+            }
+        }
+    }
 
 }

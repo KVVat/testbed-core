@@ -186,6 +186,49 @@ class AdbObserver(private val scope: CoroutineScope) {
     private val _adbState = MutableStateFlow(AdbState())
     val adbState = _adbState.asStateFlow()
 
+    private val _conflictingProcesses = MutableStateFlow<List<ConflictingAdbProcess>>(emptyList())
+    val conflictingProcesses = _conflictingProcesses.asStateFlow()
+
+    private var conflictMonitorJob: Job? = null
+
+    fun startConflictMonitoring() {
+        if (conflictMonitorJob?.isActive == true) return
+        conflictMonitorJob = scope.launch(Dispatchers.IO) {
+            // Initial delay to allow startup connection to stabilize
+            delay(15000)
+
+            while (isActive) {
+                try {
+                    val isConnected = adbState.value.isValid
+                    val conflicts = AdbConflictManager.findConflictingProcesses()
+                    val hasConflict = AdbConflictManager.hasConflict(isConnected, conflicts)
+
+                    if (hasConflict) {
+                        _conflictingProcesses.value = conflicts
+                    } else {
+                        _conflictingProcesses.value = emptyList()
+                    }
+                } catch (ignored: Exception) {}
+                delay(5000)
+            }
+        }
+    }
+
+    suspend fun cleanupAdbConflicts(): Boolean {
+        return withContext(Dispatchers.IO) {
+            log("AdbObserver", "Cleaning up conflicting ADB processes and restarting standard ADB server...", LogLevel.INFO)
+            val adbPath = resolveAdbPath() ?: "adb"
+            val success = AdbConflictManager.cleanupAndRestartAdb(adbPath) { msg, level ->
+                log("AdbObserver", msg, level)
+            }
+            _conflictingProcesses.value = emptyList()
+            if (!adbState.value.isValid) {
+                _adbState.value = AdbState(isValid = false, isUnauthorized = false)
+            }
+            success
+        }
+    }
+
     @Volatile
     var isAdbKillSwitchActive = false
         private set
@@ -593,6 +636,7 @@ class AdbObserver(private val scope: CoroutineScope) {
 
     suspend fun observeAdb() {
         checkDependencies()
+        startConflictMonitoring()
 
         while (currentCoroutineContext().isActive) {
             if (isAdbKillSwitchActive) {

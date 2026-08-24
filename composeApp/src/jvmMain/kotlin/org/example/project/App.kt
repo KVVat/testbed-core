@@ -53,6 +53,8 @@ fun App() {
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showDeviceInfoDialog by remember { mutableStateOf(false) }
     val appSettings by viewModel.appSettings.collectAsState() // ★設定を監視
+    val showAdbConflictDialog by viewModel.showAdbConflictDialog.collectAsState()
+    val conflictingProcesses by viewModel.conflictingProcesses.collectAsState()
 
     LaunchedEffect(viewModel) {
 
@@ -135,7 +137,9 @@ fun App() {
                         deviceSerial = uiState.deviceSerial,
                         isRunning = uiState.isRunning,
                         testPlugins = viewModel.testPlugins,
-                        onDeviceInfoClick= {showDeviceInfoDialog=true},
+                        hasAdbConflict = conflictingProcesses.isNotEmpty(),
+                        onAdbConflictClick = { viewModel.openAdbConflictDialog() },
+                        onDeviceInfoClick = { showDeviceInfoDialog = true },
                         onRunTest = { viewModel.runTest(it) },
                         onRefreshPlugins = { viewModel.refreshPlugins() },
                         onMenuClick = { scope.launch { drawerState.open() } },
@@ -165,7 +169,7 @@ fun App() {
             modifier = Modifier.align(Alignment.BottomCenter)
         )
     }
-    if (showSettingsDialog) {
+        if (showSettingsDialog) {
             SettingsDialog(
                 currentSettings = appSettings,
                 onDismiss = { showSettingsDialog = false },
@@ -173,13 +177,24 @@ fun App() {
                     viewModel.saveSettings(newSettings)
                     showSettingsDialog = false
                 },
-                onReinstallAgent = { viewModel.reinstallMuttonAgent() }
+                onReinstallAgent = { viewModel.reinstallMuttonAgent() },
+                onCleanRestartAdb = {
+                    viewModel.resolveAdbConflicts()
+                    showSettingsDialog = false
+                }
             )
         }
         if (showDeviceInfoDialog) {
             DeviceInfoDialog(
                 infoText = uiState.deviceInfo,
                 onDismiss = { showDeviceInfoDialog = false }
+            )
+        }
+        if (showAdbConflictDialog && conflictingProcesses.isNotEmpty()) {
+            AdbConflictDialog(
+                processes = conflictingProcesses,
+                onDismiss = { viewModel.dismissAdbConflictDialog() },
+                onCleanAndRestart = { viewModel.resolveAdbConflicts() }
             )
         }
         if (isLogcatWindowOpen) {
@@ -496,6 +511,8 @@ fun TopControlBar(
     deviceSerial: String,
     isRunning: Boolean,
     testPlugins: List<TestPlugin>,
+    hasAdbConflict: Boolean = false,
+    onAdbConflictClick: () -> Unit = {},
     onRunTest: (TestPlugin) -> Unit,
     onDeviceInfoClick: () -> Unit,
     onRefreshPlugins: () -> Unit,
@@ -564,6 +581,12 @@ fun TopControlBar(
                     Spacer(Modifier.width(4.dp))
                     IconButton(onClick = onDeviceInfoClick, modifier = Modifier.size(24.dp)) {
                         Icon(Icons.Default.Info, contentDescription = "Device Info", tint = deviceStatusColor, modifier = Modifier.size(16.dp))
+                    }
+                }
+                if (hasAdbConflict) {
+                    Spacer(Modifier.width(4.dp))
+                    IconButton(onClick = onAdbConflictClick, modifier = Modifier.size(24.dp)) {
+                        Icon(Icons.Default.Warning, contentDescription = "Conflicting ADB Detected", tint = Color(0xFFE5C07B), modifier = Modifier.size(18.dp))
                     }
                 }
                 Divider(Modifier.height(24.dp).width(1.dp).padding(horizontal = 8.dp), color = Color.Gray)
@@ -812,7 +835,8 @@ fun SettingsDialog(
     currentSettings: AppSettings,
     onDismiss: () -> Unit,
     onSave: (AppSettings) -> Unit,
-    onReinstallAgent: () -> Unit
+    onReinstallAgent: () -> Unit,
+    onCleanRestartAdb: () -> Unit = {}
 ) {
     // ダイアログ内のローカルステート
     var autoOpen by remember { mutableStateOf(currentSettings.autoOpenLogcat) }
@@ -958,9 +982,13 @@ fun SettingsDialog(
                 Spacer(Modifier.height(24.dp))
 
                 // ボタン類（フッター）
-                Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = onCleanRestartAdb) {
+                        Text("Clean ADB", color = Color(0xFFE06C75), fontSize = 12.sp)
+                    }
+                    Spacer(Modifier.width(4.dp))
                     TextButton(onClick = onReinstallAgent) {
-                        Text("Reinstall Agent", color = Color(0xFF569CD6))
+                        Text("Reinstall Agent", color = Color(0xFF569CD6), fontSize = 12.sp)
                     }
                     Spacer(Modifier.weight(1f))
                     TextButton(onClick = onDismiss) {
@@ -1009,6 +1037,127 @@ fun DeviceInfoDialog(infoText: String, onDismiss: () -> Unit) {
                 Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
                     TextButton(onClick = onDismiss) {
                         Text("Close", color = Color(0xFF569CD6))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AdbConflictDialog(
+    processes: List<org.example.project.adb.ConflictingAdbProcess>,
+    onDismiss: () -> Unit,
+    onCleanAndRestart: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2D30)),
+            modifier = Modifier.padding(16.dp).width(500.dp)
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = "Warning",
+                        tint = Color(0xFFE5C07B),
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        text = "Conflicting ADB Process Detected",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                Text(
+                    text = "Multiple or non-standard ADB processes are currently running in the background. This may block exclusive USB access and cause device disconnection.",
+                    color = Color(0xFFCCCCCC),
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
+                )
+
+                Spacer(Modifier.height(14.dp))
+
+                Text(
+                    text = "Detected Processes:",
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(Modifier.height(6.dp))
+
+                Card(
+                    shape = RoundedCornerShape(6.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 160.dp)
+                ) {
+                    LazyColumn(modifier = Modifier.padding(8.dp)) {
+                        items(processes) { proc ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = "PID ${proc.pid}",
+                                            color = Color(0xFF61AFEF),
+                                            fontSize = 12.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        if (proc.isNonStandardPort && proc.port != null) {
+                                            Spacer(Modifier.width(8.dp))
+                                            Surface(
+                                                color = Color(0xFFE06C75).copy(alpha = 0.2f),
+                                                shape = RoundedCornerShape(4.dp)
+                                            ) {
+                                                Text(
+                                                    text = "Port ${proc.port}",
+                                                    color = Color(0xFFE06C75),
+                                                    fontSize = 11.sp,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Text(
+                                        text = proc.command,
+                                        color = Color.LightGray,
+                                        fontSize = 11.sp,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(20.dp))
+
+                Row(
+                    horizontalArrangement = Arrangement.End,
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text("Dismiss", color = Color.Gray)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Button(
+                        onClick = onCleanAndRestart,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE06C75))
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Kill & Restart ADB", color = Color.White)
                     }
                 }
             }

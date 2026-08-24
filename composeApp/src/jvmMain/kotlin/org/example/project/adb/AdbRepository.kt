@@ -13,6 +13,7 @@ class AdbRepository {
     val adbObserver = AdbObserver(scope)
     
     val adbState: StateFlow<AdbState> = adbObserver.adbState
+    val conflictingProcesses: StateFlow<List<ConflictingAdbProcess>> = adbObserver.conflictingProcesses
     val logs: SharedFlow<LogEvent> = adbObserver.logs
     val logcatLines: SharedFlow<String> = adbObserver.logcatLines
     val logcatFlush: SharedFlow<Unit> = adbObserver.logcatFlush
@@ -24,6 +25,8 @@ class AdbRepository {
     fun setAdbKillSwitch(active: Boolean) {
         adbObserver.setAdbKillSwitch(active)
     }
+
+    suspend fun cleanupAdbConflicts(): Boolean = adbObserver.cleanupAdbConflicts()
 
     init {
         scope.launch {
