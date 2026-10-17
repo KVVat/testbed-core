@@ -56,7 +56,7 @@ class TestDeviceMdfppVerification(unittest.TestCase):
         self.bridge.log("MDFPP", f"FPT_TUD_EXT.1: OS Version={os_version}, Security Patch={patch_level}", "PASS")
 
     def test_03_file_based_encryption_state(self):
-        """FCS_CKM_EXT.4 / Storage Encryption: Verifies File-Based Encryption (FBE) is active."""
+        """FDP_DAR_EXT.1 / Storage Encryption: Verifies File-Based Encryption (FBE) is active."""
         self._require_device()
         
         crypto_type = self.bridge.getProp("ro.crypto.type").strip()
@@ -65,19 +65,21 @@ class TestDeviceMdfppVerification(unittest.TestCase):
         # Modern Android devices must use File-Based Encryption
         self.assertEqual(crypto_type, "file", f"ro.crypto.type should be 'file' (FBE), found '{crypto_type}'")
         self.assertEqual(crypto_state, "encrypted", f"ro.crypto.state must be 'encrypted', found '{crypto_state}'")
-        self.bridge.log("MDFPP", f"FCS_CKM_EXT.4: Storage Encryption is active (type={crypto_type}, state={crypto_state})", "PASS")
+        self.bridge.log("MDFPP", f"FDP_DAR_EXT.1: Storage Encryption is active (type={crypto_type}, state={crypto_state})", "PASS")
 
     def test_04_selinux_enforcement_status(self):
-        """FDP_IFC_EXT.1: Verifies Mandatory Access Control (SELinux) subsystem status."""
+        """FPT_AEX_EXT.4 (Domain Isolation) supporting check: SELinux must be Enforcing."""
         self._require_device()
         
         selinux_status = self.bridge.executeShell("getenforce").strip()
-        self.assertIn(
+        # The evaluated configuration runs SELinux in Enforcing mode. Permissive (e.g. left
+        # behind by `setenforce 0` on a userdebug build) must be reported as a failure.
+        self.assertEqual(
             selinux_status,
-            ["Enforcing", "Permissive"],
-            f"SELinux status must be Enforcing (or Permissive in test builds), got '{selinux_status}'"
+            "Enforcing",
+            f"SELinux status must be Enforcing, got '{selinux_status}'"
         )
-        self.bridge.log("MDFPP", f"FDP_IFC_EXT.1: SELinux status is '{selinux_status}'", "PASS")
+        self.bridge.log("MDFPP", f"FPT_AEX_EXT.4: SELinux status is '{selinux_status}'", "PASS")
 
     def test_05_system_clock_synchronization(self):
         """FPT_STM.1: Verifies reliable time stamps between host and target Android device."""

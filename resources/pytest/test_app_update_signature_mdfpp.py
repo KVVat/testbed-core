@@ -1,5 +1,5 @@
 """
-FPT_TUD_EXT.1 Application Update Signature Verification Test Suite
+FPT_TUD_EXT.3 Application Signing (Test 107) & Application Update Signature Verification Test Suite
 Common Criteria (CC) MDFPP v3.3 Compliance Test for Target Android Device
 """
 
@@ -25,6 +25,16 @@ class TestAppUpdateSignatureMdfpp(unittest.TestCase):
         # Ensure clean state after tests
         pass
 
+    def _ensure_v1_installed(self):
+        """Makes a step runnable on its own: installs v1 unless it is already installed."""
+        dumpsys_out = self.bridge.executeShell(f"dumpsys package {PACKAGE_NAME}")
+        if re.search(r"versionCode=1\b", dumpsys_out):
+            return
+        self.bridge.uninstallApp(PACKAGE_NAME)
+        time.sleep(0.5)
+        install_res = self.bridge.installApk("appupdate-v1.apk", "-r -d")
+        self.assertIn("Success", install_res, f"Precondition failed: could not install appupdate-v1.apk: {install_res}")
+
     def test_01_install_initial_version_v1(self):
         """Installs the initial application package (v1) signed with standard test key."""
         self.bridge.log("MDFPP", "Step 1: Preparing clean environment and installing v1 APK...", "INFO")
@@ -45,6 +55,7 @@ class TestAppUpdateSignatureMdfpp(unittest.TestCase):
     def test_02_reject_mismatched_signature_update(self):
         """Verifies that an update package with a conflicting/mismatched signature is rejected."""
         self.bridge.log("MDFPP", "Step 2: Attempting update with mismatched signature APK...", "INFO")
+        self._ensure_v1_installed()
         
         # Must fail with INSTALL_FAILED_UPDATE_INCOMPATIBLE or signature mismatch
         update_res = self.bridge.installApk("appupdate-mismatched.apk", "-r")
@@ -67,17 +78,25 @@ class TestAppUpdateSignatureMdfpp(unittest.TestCase):
     def test_03_reject_unsigned_update(self):
         """Verifies that an unsigned or malformed APK update is rejected by the package manager."""
         self.bridge.log("MDFPP", "Step 3: Attempting update with unsigned APK...", "INFO")
+        self._ensure_v1_installed()
         
         update_res = self.bridge.installApk("appupdate-unsigned.apk", "-r")
         self.assertNotIn("Success", update_res, "Update with unsigned APK MUST NOT succeed")
         
+        # Only signature-related rejections count. A generic INSTALL_FAILED_* (e.g. storage or
+        # downgrade errors) would not show that the signature mechanism rejected the APK.
         is_rejected = any(err in update_res for err in [
             "INSTALL_PARSE_FAILED_NO_CERTIFICATES",
-            "INSTALL_FAILED_INVALID_APK",
-            "Failed to parse",
-            "INSTALL_FAILED"
-        ])
+            "INSTALL_PARSE_FAILED_CERTIFICATE_ENCODING",
+            "INSTALL_PARSE_FAILED_INCONSISTENT_CERTIFICATES"
+        ]) or (
+            "INSTALL_FAILED_INVALID_APK" in update_res
+            and re.search(r"signature|certificate", update_res, re.IGNORECASE) is not None
+        )
         self.assertTrue(is_rejected, f"Expected signature parsing error for unsigned APK, got: '{update_res}'")
+
+        dumpsys_out = self.bridge.executeShell(f"dumpsys package {PACKAGE_NAME}")
+        self.assertIn("versionCode=1", dumpsys_out, "Package version must remain 1 after rejected unsigned update")
         self.bridge.log("MDFPP", "Step 3 PASSED: Unsigned APK update properly blocked", "PASS")
 
     def test_04_accept_valid_signature_update_v2(self):
