@@ -8,14 +8,14 @@ repositories {
 
 kotlin {
     // 1. JVM Target
-    jvm {
-        withJava()
-    }
+    jvm()
 
     // 2. Native Target based on Host OS to avoid cross-compilation errors
+    // Kotlin/Native on macOS requires full Xcode.app (xcrun xcodebuild), not just CommandLineTools.
     val hostOs = System.getProperty("os.name").lowercase()
+    val hasXcode = File("/Applications/Xcode.app").exists()
     when {
-        hostOs.contains("mac") -> {
+        hostOs.contains("mac") && hasXcode -> {
             macosX64 {
                 binaries { executable { entryPoint = "org.example.project.mcp.main" } }
             }
@@ -47,24 +47,31 @@ kotlin {
                 implementation("io.ktor:ktor-client-cio:3.2.3")
             }
         }
-        
-        val nativeMain by creating {
-            dependsOn(commonMain)
-        }
 
-        if (hostOs.contains("mac")) {
-            val macosX64Main by getting { dependsOn(nativeMain) }
-            val macosArm64Main by getting { dependsOn(nativeMain) }
-            macosX64Main.dependencies { implementation("io.ktor:ktor-client-darwin:3.2.3") }
-            macosArm64Main.dependencies { implementation("io.ktor:ktor-client-darwin:3.2.3") }
-        }
-        if (hostOs.contains("win")) {
-            val mingwX64Main by getting { dependsOn(nativeMain) }
-            mingwX64Main.dependencies { implementation("io.ktor:ktor-client-winhttp:3.2.3") }
-        }
-        if (hostOs.contains("nux") || hostOs.contains("nand")) {
-            val linuxX64Main by getting { dependsOn(nativeMain) }
-            linuxX64Main.dependencies { implementation("io.ktor:ktor-client-curl:3.2.3") }
+        val hasNativeTarget = (hostOs.contains("mac") && hasXcode) ||
+            hostOs.contains("win") ||
+            hostOs.contains("nux") ||
+            hostOs.contains("nand")
+
+        if (hasNativeTarget) {
+            val nativeMain by creating {
+                dependsOn(commonMain)
+            }
+
+            if (hostOs.contains("mac") && hasXcode) {
+                val macosX64Main by getting { dependsOn(nativeMain) }
+                val macosArm64Main by getting { dependsOn(nativeMain) }
+                macosX64Main.dependencies { implementation("io.ktor:ktor-client-darwin:3.2.3") }
+                macosArm64Main.dependencies { implementation("io.ktor:ktor-client-darwin:3.2.3") }
+            }
+            if (hostOs.contains("win")) {
+                val mingwX64Main by getting { dependsOn(nativeMain) }
+                mingwX64Main.dependencies { implementation("io.ktor:ktor-client-winhttp:3.2.3") }
+            }
+            if (hostOs.contains("nux") || hostOs.contains("nand")) {
+                val linuxX64Main by getting { dependsOn(nativeMain) }
+                linuxX64Main.dependencies { implementation("io.ktor:ktor-client-curl:3.2.3") }
+            }
         }
     }
 }
@@ -78,10 +85,11 @@ tasks.named<Jar>("jvmJar") {
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
-// Copy compiled native executable to tools/ root directory (macOS only)
+// Copy compiled native executable to tools/ root directory (macOS with Xcode.app installed)
 val copyNativeBridgeToTools by tasks.registering {
     val hostOs = System.getProperty("os.name").lowercase()
-    if (hostOs.contains("mac")) {
+    val hasXcode = File("/Applications/Xcode.app").exists()
+    if (hostOs.contains("mac") && hasXcode) {
         dependsOn("linkReleaseExecutableMacosArm64")
         
         val pDir = projectDir
